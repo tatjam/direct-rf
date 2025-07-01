@@ -1,0 +1,19 @@
+# Cargo.toml
+[package]
+name = "directrf"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+opt-level = 'z' # turn on maximum optimizations. We only have 64kB
+lto = true      # Link-time-optimizations for further size reduction
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+panic-halt = "1.0.0"
+
+
+[dependencies.stm32h7]
+version = "^0.16.0"
+features = ["stm32h7s", "rt"]
