@@ -12,6 +12,7 @@ lto = true      # Link-time-optimizations for further size reduction
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"
 panic-halt = "1.0.0"
+libm = "0.2.15"
 
 
 [dependencies.stm32h7]
