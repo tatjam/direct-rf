@@ -77,13 +77,11 @@ fn setup_pll_autochirp(rcc: &mut stm32h7s::RCC) {
 // enables the FPU
 #[entry]
 fn main() -> ! {
-    //let mut periph = stm32h7s::Peripherals::take().unwrap();
-    //defmt::println!("Guamdo!");
+    let mut periph = stm32h7s::Peripherals::take().unwrap();
+    defmt::info!("Hello!");
 
-    //setup_pll_autochirp(&mut periph.RCC);
+    setup_pll_autochirp(&mut periph.RCC);
 
     loop {
-
-      //  defmt::error!("Hello, world!");
     }
 }
