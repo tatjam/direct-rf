@@ -84,6 +84,28 @@ fn main() -> ! {
     setup_gpio(&mut periph, powersupply_guarantee.unwrap());
     autochirp::setup_pll(&mut periph.RCC);
 
+    let rcc = &mut periph.RCC;
+
+    let mut i: u16 = 0;
+    let mut j: u16 = 0;
     loop {
+        rcc.pllcfgr().modify(|_, w| w.pll1fracen().clear_bit());
+
+        // Wait for a bit (atleast 5μs)
+        for i in 0..j {
+            core::hint::black_box(i);
+        }
+
+        rcc.pll1fracr().modify(|_, w| unsafe{ w.fracn().bits(i)});
+        rcc.pllcfgr().modify(|_, w| w.pll1fracen().set_bit());
+
+        i = i.wrapping_add(1);
+        if i > 60 {
+            i = 0;
+            j = j.wrapping_add(1);
+            if j > 100 {
+                j = 0;
+            }
+        }
     }
 }
