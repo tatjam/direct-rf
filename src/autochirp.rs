@@ -3,7 +3,7 @@ use stm32h7::{stm32h7s};
 // Uses spread spectrum to "automatically" generate chirps
 pub fn setup_pll(rcc: &mut stm32h7s::RCC) {
     // Configure these as desired
-    let desired_center_freq: f64 = 430_000_000.0;
+    let desired_center_freq: f64 = 210_000_000.0;
     // (HSE on NUCLEO board)
     let input_freq: f64 = 24_000_000.0;
     let divided_freq: f64 = 4_000_000.0;

@@ -9,36 +9,6 @@ use cortex_m_rt::entry;
 
 use stm32h7::{stm32h7s};
 
-struct PowerSupplyGuarantee {}
-
-// Returns true if power supply is below 2V, which gurantees fast GPIO is safe
-fn powersupply_okay(pwr: &mut stm32h7s::PWR) -> Option<PowerSupplyGuarantee> {
-
-    // Setup threshold for PVD (Programmable Voltage Detector)
-    // (Level 0 is around 2V)
-    pwr.cr1().modify(|_, w| unsafe{ w.pls().bits(0) });
-
-    // Launch the PVD
-    pwr.cr1().modify(|_, w| w.pvde().set_bit());
-
-    // Wait a bit, just in case supply is stabilizing
-    for i in 0..100000 {
-        core::hint::black_box(i);
-    }
-
-    // Check if the supply voltage is okay (less than maximum)
-    // (PVD gets true if voltage is below trigger!)
-    let okay = pwr.sr1().read().pvdo().bit_is_set();
-
-    pwr.cr1().modify(|_, w| w.pvde().clear_bit());
-
-    if okay {
-        return Some(PowerSupplyGuarantee {});
-    }
-
-    return None;
-}
-
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC) {
     defmt::info!("Starting HSE");
@@ -52,7 +22,7 @@ fn setup_hse(rcc: &mut stm32h7s::RCC) {
 
 // Launches GPIO peripheral and setups GPIO PA8 for fastest possible operation,
 // also connecting it to MCO1 (alternate function)
-fn setup_gpio(periph: &mut stm32h7s::Peripherals, guarantee: PowerSupplyGuarantee) {
+fn setup_gpio(periph: &mut stm32h7s::Peripherals) {
     let rcc = &mut periph.RCC;
     let gpioa = &mut periph.GPIOA;
 
@@ -62,7 +32,8 @@ fn setup_gpio(periph: &mut stm32h7s::Peripherals, guarantee: PowerSupplyGuarante
     // Configure PA8 for special function
     gpioa.moder().modify(|_, w| w.mode8().alternate());
     // Set it for highest speed operation
-    //gpioa.ospeedr().modify(|_, w| w.ospeed8().very_high_speed());
+    gpioa.ospeedr().modify(|_, w| w.ospeed8().very_high_speed());
+
 
 }
 
@@ -74,38 +45,30 @@ fn main() -> ! {
     let mut periph = stm32h7s::Peripherals::take().unwrap();
     defmt::info!("Hello directrf!");
 
-    let powersupply_guarantee = powersupply_okay(&mut periph.PWR);
-    if powersupply_guarantee.is_none() {
-        defmt::error!("Power supply voltage too high. Make sure you use 1.8V.");
-        loop {}
-    }
-
     setup_hse(&mut periph.RCC);
-    setup_gpio(&mut periph, powersupply_guarantee.unwrap());
+    setup_gpio(&mut periph);
     autochirp::setup_pll(&mut periph.RCC);
 
     let rcc = &mut periph.RCC;
 
     let mut i: u16 = 0;
-    let mut j: u16 = 0;
     loop {
         rcc.pllcfgr().modify(|_, w| w.pll1fracen().clear_bit());
 
         // Wait for a bit (atleast 5μs)
-        for i in 0..j {
+        /*
+        for i in 0..1000 {
             core::hint::black_box(i);
         }
+
+         */
 
         rcc.pll1fracr().modify(|_, w| unsafe{ w.fracn().bits(i)});
         rcc.pllcfgr().modify(|_, w| w.pll1fracen().set_bit());
 
         i = i.wrapping_add(1);
-        if i > 60 {
+        if i > 660 {
             i = 0;
-            j = j.wrapping_add(1);
-            if j > 100 {
-                j = 0;
-            }
         }
     }
 }
