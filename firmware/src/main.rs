@@ -2,6 +2,9 @@
 #![no_main]
 
 mod autochirp;
+mod comm;
+mod comm_messages;
+mod sequencer;
 
 use defmt_rtt as _;
 use panic_probe as _;
@@ -33,8 +36,6 @@ fn setup_gpio(periph: &mut stm32h7s::Peripherals) {
     gpioa.moder().modify(|_, w| w.mode8().alternate());
     // Set it for highest speed operation
     gpioa.ospeedr().modify(|_, w| w.ospeed8().very_high_speed());
-
-
 }
 
 // This marks the entrypoint of our application. The cortex_m_rt creates some
@@ -47,28 +48,13 @@ fn main() -> ! {
 
     setup_hse(&mut periph.RCC);
     setup_gpio(&mut periph);
-    autochirp::setup_pll(&mut periph.RCC);
+    let sequencer_state = sequencer::setup(&mut periph);
+    sequencer::launch(sequencer_state);
+    sequencer::stop(sequencer_state);
 
     let rcc = &mut periph.RCC;
 
     let mut i: u16 = 0;
     loop {
-        rcc.pllcfgr().modify(|_, w| w.pll1fracen().clear_bit());
-
-        // Wait for a bit (atleast 5μs)
-        /*
-        for i in 0..1000 {
-            core::hint::black_box(i);
-        }
-
-         */
-
-        rcc.pll1fracr().modify(|_, w| unsafe{ w.fracn().bits(i)});
-        rcc.pllcfgr().modify(|_, w| w.pll1fracen().set_bit());
-
-        i = i.wrapping_add(1);
-        if i > 660 {
-            i = 0;
-        }
     }
 }
