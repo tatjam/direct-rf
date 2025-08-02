@@ -6,11 +6,13 @@ mod comm;
 mod comm_messages;
 mod sequencer;
 
+use cortex_m::singleton;
 use defmt_rtt as _;
 use panic_probe as _;
 use cortex_m_rt::entry;
 
 use stm32h7::{stm32h7s};
+use stm32h7::stm32h7s::Interrupt;
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC) {
@@ -25,10 +27,7 @@ fn setup_hse(rcc: &mut stm32h7s::RCC) {
 
 // Launches GPIO peripheral and setups GPIO PA8 for fastest possible operation,
 // also connecting it to MCO1 (alternate function)
-fn setup_gpio(periph: &mut stm32h7s::Peripherals) {
-    let rcc = &mut periph.RCC;
-    let gpioa = &mut periph.GPIOA;
-
+fn setup_gpio(rcc: &mut stm32h7s::RCC, gpioa: &mut stm32h7s::GPIOA) {
     // Enable the gpioa peripheral
     rcc.ahb4enr().modify(|_, w| w.gpioaen().enabled());
 
@@ -44,17 +43,20 @@ fn setup_gpio(periph: &mut stm32h7s::Peripherals) {
 #[entry]
 fn main() -> ! {
     let mut periph = stm32h7s::Peripherals::take().unwrap();
+    let mut core_periph = cortex_m::Peripherals::take().unwrap();
     defmt::info!("Hello directrf!");
 
+
     setup_hse(&mut periph.RCC);
-    setup_gpio(&mut periph);
-    let sequencer_state = sequencer::setup(&mut periph);
+    setup_gpio(&mut periph.RCC, &mut periph.GPIOA);
+
+    let ch0 = periph.GPDMA.ch(0);
+    let sequencer_state = sequencer::setup(&mut periph.RCC, periph.TIM1, periph.GPDMA);
     sequencer::launch(sequencer_state);
     sequencer::stop(sequencer_state);
 
     let rcc = &mut periph.RCC;
 
-    let mut i: u16 = 0;
     loop {
     }
 }

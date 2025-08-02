@@ -13,6 +13,11 @@ use heapless::Vec;
 use cortex_m::singleton;
 
 use serde::de::Unexpected::Seq;
+use stm32h7::stm32h7s::gpdma::CH;
+use stm32h7::stm32h7s::Interrupt;
+
+// Do not change, code depends on this interrupt being called!
+const DMA_CH: usize = 0;
 
 const MAX_SEQUENCE_LEN: usize = 128;
 const MAX_DIVN_CHANGES: usize = 32;
@@ -27,15 +32,21 @@ pub struct SequencerState {
     fracn_buffer: Vec<u16, MAX_SEQUENCE_LEN>,
     divn_buffer: Vec<DivnChange, MAX_DIVN_CHANGES>,
     divni: usize,
+    tim: stm32h7s::TIM1,
+    dma: stm32h7s::GPDMA,
 }
 
 fn prepare_fracn_dma(state: &mut SequencerState) {
     let divn_change = &state.divn_buffer[state.divni];
     assert!(divn_change.start_tick < state.divn_buffer.len());
     assert!(divn_change.start_tick + divn_change.for_ticks < state.divn_buffer.len());
+    assert!(state.dma.ch(DMA_CH).cr().read().en().bit_is_clear());
 
-
-
+    // Set the start address and size to copy for the DMA run
+    let buff_ptr = state.fracn_buffer.as_ptr();
+    let start_addr = (buff_ptr as usize + divn_change.start_tick * 2) as u32;
+    state.dma.ch(DMA_CH).sar().write(|w| unsafe{ w.sa().bits(start_addr) });
+    state.dma.ch(DMA_CH).br1().write(|w| unsafe { w.bndt().bits(divn_change.for_ticks as u16) });
 }
 
 fn step(state: &mut SequencerState) {
@@ -61,15 +72,25 @@ pub fn stop(state: &mut SequencerState) {
 
 }
 
-pub fn setup(periph: &mut stm32h7s::Peripherals) -> &'static mut SequencerState {
+
+// We take full ownership of a DMA and a timer
+pub fn setup(rcc: &mut stm32h7s::RCC, tim: stm32h7s::TIM1, dma: stm32h7s::GPDMA) -> &'static mut SequencerState {
     // Setup basic DMA
-    periph.RCC.ahb1enr().write(|w| w.gpdma1en().enabled());
+    rcc.ahb1enr().write(|w| w.gpdma1en().enabled());
+
+    // Trigger DMA on TIM1
 
     // Setup interrupts
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(Interrupt::GPDMA1_CH0);
+    }
+
 
     return singleton!(: SequencerState = SequencerState {
         divn_buffer: Vec::new(),
         fracn_buffer: Vec::new(),
         divni: 0,
+        tim,
+        dma
     }).unwrap();
 }
