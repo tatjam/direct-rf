@@ -52,8 +52,11 @@ fn main() -> ! {
 
     let ch0 = periph.GPDMA.ch(0);
     let sequencer_state = sequencer::setup(&mut periph.RCC, periph.TIM1, periph.GPDMA);
-    sequencer::launch(sequencer_state);
-    sequencer::stop(sequencer_state);
+
+    sequencer::with_state(sequencer_state, |state| {
+        sequencer::launch(state);
+        sequencer::stop(state);
+    });
 
     let rcc = &mut periph.RCC;
 

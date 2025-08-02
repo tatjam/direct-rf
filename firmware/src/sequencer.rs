@@ -7,14 +7,20 @@
     at which point the transfer interrupt is triggered, the software changes divn, possibly delays,
     and launches the DMA pointing to the new buffer chunk.
  */
+use core::cell::{Ref, RefCell};
+use core::mem::MaybeUninit;
 use core::ops::Div;
+use core::ptr::{null, null_mut};
+use cortex_m::interrupt::Mutex;
 use stm32h7::{stm32h7s};
 use heapless::Vec;
 use cortex_m::singleton;
 
 use serde::de::Unexpected::Seq;
 use stm32h7::stm32h7s::gpdma::CH;
-use stm32h7::stm32h7s::Interrupt;
+use stm32h7::stm32h7s::{interrupt, Interrupt};
+
+static SEQUENCER_STATE: Mutex<RefCell<MaybeUninit<SequencerState>>> = Mutex::new(RefCell::new(MaybeUninit::uninit()));
 
 // Do not change, code depends on this interrupt being called!
 const DMA_CH: usize = 0;
@@ -72,9 +78,21 @@ pub fn stop(state: &mut SequencerState) {
 
 }
 
+#[inline]
+pub fn with_state<F, R>(state: &Mutex<RefCell<MaybeUninit<SequencerState>>>, f: F) -> R
+where
+    F: FnOnce(&mut SequencerState) -> R,
+{
+    return cortex_m::interrupt::free(|cs| {
+        unsafe {
+            f(&mut state.borrow(cs).borrow_mut().assume_init_mut())
+        }
+    });
+}
 
 // We take full ownership of a DMA and a timer
-pub fn setup(rcc: &mut stm32h7s::RCC, tim: stm32h7s::TIM1, dma: stm32h7s::GPDMA) -> &'static mut SequencerState {
+pub fn setup(rcc: &mut stm32h7s::RCC, tim: stm32h7s::TIM1, dma: stm32h7s::GPDMA)
+             -> &'static Mutex<RefCell<MaybeUninit<SequencerState>>> {
     // Setup basic DMA
     rcc.ahb1enr().write(|w| w.gpdma1en().enabled());
 
@@ -85,12 +103,22 @@ pub fn setup(rcc: &mut stm32h7s::RCC, tim: stm32h7s::TIM1, dma: stm32h7s::GPDMA)
         cortex_m::peripheral::NVIC::unmask(Interrupt::GPDMA1_CH0);
     }
 
+    cortex_m::interrupt::free( |cs| {
+        SEQUENCER_STATE.borrow(cs).replace(MaybeUninit::new(SequencerState{
+            fracn_buffer: Vec::new(),
+            divn_buffer: Vec::new(),
+            divni: 0,
+            tim,
+            dma,
+        }));
+    });
 
-    return singleton!(: SequencerState = SequencerState {
-        divn_buffer: Vec::new(),
-        fracn_buffer: Vec::new(),
-        divni: 0,
-        tim,
-        dma
-    }).unwrap();
+    return &SEQUENCER_STATE;
+}
+
+#[interrupt]
+unsafe fn GPDMA1_CH0() {
+    with_state(&SEQUENCER_STATE, |state| {
+
+    });
 }
