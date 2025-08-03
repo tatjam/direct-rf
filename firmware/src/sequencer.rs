@@ -1,11 +1,6 @@
 /*
-    The sequencer uses DMA to drive the PLL at desired frequencies automatically, without any
-    software effects on timing. The programmed sequence has some limitations due to this.
-
-    To do so, a single buffer is used. The DMA writes fracn to the PLL from this buffer, driven
-    at the desired frequency very precisely. The fracn changes are carried up to the divn change,
-    at which point the transfer interrupt is triggered, the software changes divn, possibly delays,
-    and launches the DMA pointing to the new buffer chunk.
+    The sequencer uses TIM to drive the PLL at desired frequencies automatically, without any
+    significant software effects on timing.
  */
 use core::cell::{Ref, RefCell};
 use core::mem::MaybeUninit;
@@ -17,39 +12,59 @@ use heapless::Vec;
 use cortex_m::singleton;
 
 use serde::de::Unexpected::Seq;
-use stm32h7::stm32h7s::gpdma::CH;
 use stm32h7::stm32h7s::{interrupt, Interrupt};
 
 static SEQUENCER_STATE: Mutex<RefCell<MaybeUninit<SequencerState>>> = Mutex::new(RefCell::new(MaybeUninit::uninit()));
 
-// Do not change, code depends on this interrupt being called!
-const DMA_CH: usize = 0;
-
 const MAX_SEQUENCE_LEN: usize = 128;
 const MAX_DIVN_CHANGES: usize = 32;
 
-struct PLLChange {
-    for_ticks: usize,
-    start_tick: usize,
-    divn: u16,
-    vcosel: bool,
-    output_pre: u8,
-    tim_count: u16,
+pub struct PLLChange {
+    pub for_ticks: usize,
+    pub start_tick: usize,
+    pub divn: u16,
+    pub vcosel: bool,
+    pub divp: u8,
+    // WARNING: Only us if timer prescaler is properly configured
+    pub tim_us: u32,
 }
 
 pub struct SequencerState {
-    fracn_buffer: Vec<u16, MAX_SEQUENCE_LEN>,
-    pllchange_buffer: Vec<PLLChange, MAX_DIVN_CHANGES>,
-    pllchangei: usize,
+    pub fracn_buffer: Vec<u16, MAX_SEQUENCE_LEN>,
+    pub pllchange_buffer: Vec<PLLChange, MAX_DIVN_CHANGES>,
+    pllchangei: isize,
     tim: stm32h7s::TIM2,
-    dma: stm32h7s::GPDMA,
     rcc: stm32h7s::RCC,
+
+    fracn_rem: usize,
+    fracn_i: usize,
+
+    is_running: bool,
 }
 
 fn set_pllchange(state: &mut SequencerState) {
-    let change = &state.pllchange_buffer[state.pllchangei];
-
     assert!(state.rcc.cr().read().pll2on().bit_is_clear());
+    let change = &state.pllchange_buffer[state.pllchangei as usize];
+
+    // Output PLL on MCO2, dividing the PLL VCO freq as convenient
+    state.rcc.cfgr().modify(|_, w| w.mco2().pll2_p().mco2pre().set(1));
+    state.rcc.pllcfgr().modify(|_, w| w.divp2en().enabled());
+
+    state.rcc.pll2divr1().modify(|_, w| unsafe { w.divn2().bits(change.divn).divp().bits(change.divp) });
+
+    // Set the fracn initial value
+    let fracn0 = state.fracn_buffer[change.start_tick];
+    state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().clear_bit());
+    state.rcc.pll2fracr().modify(|_, w| unsafe { w.fracn().bits(fracn0) });
+    state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().set_bit());
+
+    // TODO: We must wait 5us for stability, do so, or not?
+
+    state.rcc.cr().modify(|_, w| w.pll2on().set_bit());
+
+    // Wait for PLL ready
+    while state.rcc.cr().read().pll2rdy().bit_is_clear() {}
+
 }
 
 fn setup_pll(state: &mut SequencerState) {
@@ -72,48 +87,30 @@ fn setup_pll(state: &mut SequencerState) {
     // which are then divided by 30 to get 8Mhz on the p output
     state.rcc.pll2divr1().modify(|_, w| unsafe { w.divn2().bits(20 - 1).divp().bits(30-1) });
 
-    // Enable PLL and wait for ready TODO: REMOVE
-    state.rcc.cr().modify(|_, w| w.pll2on().set_bit());
-
-    // Wait for PLL ready
-    while state.rcc.cr().read().pll2rdy().bit_is_clear() {}
-
-    defmt::info!("PLL2 is ready!");
+    defmt::info!("PLL2 is ready to go!");
 
 
-}
-
-fn prepare_fracn_dma(state: &mut SequencerState) {
-    let change = &state.pllchange_buffer[state.pllchangei];
-
-    assert!(change.start_tick < state.pllchange_buffer.len());
-    assert!(change.start_tick + change.for_ticks < state.pllchange_buffer.len());
-    assert!(state.dma.ch(DMA_CH).cr().read().en().bit_is_clear());
-
-    // Set the start address and size to copy for the DMA run
-    let buff_ptr = state.fracn_buffer.as_ptr();
-    let start_addr = (buff_ptr as usize + change.start_tick * 2) as u32;
-    state.dma.ch(DMA_CH).sar().modify(|_, w| unsafe{ w.sa().bits(start_addr) });
-    state.dma.ch(DMA_CH).br1().modify(|_, w| unsafe { w.bndt().bits(change.for_ticks as u16) });
 }
 
 fn step(state: &mut SequencerState) {
+    assert!(state.is_running);
+
     state.pllchangei = state.pllchangei + 1;
-    if state.pllchangei == state.pllchange_buffer.len() {
+    assert!(state.pllchangei >= 0);
+
+    if state.pllchangei as usize == state.pllchange_buffer.len() {
         // We ran out of the buffer, restart
         state.pllchangei = 0;
     }
+
+    // Disable TIM
+    state.tim.cr1().modify(|_, w| w.cen().disabled());
 
     // Disable the PLL and output
     state.rcc.pllcfgr().modify(|_, w| w.divp2en().disabled());
     state.rcc.cr().modify(|_, w| w.pll2on().clear_bit());
 
-    // Prepare fracn for next run
-    prepare_fracn_dma(state);
-
-    set_dma_timer(state);
-
-    // Configure PLL divn
+    // Configure PLL divn (and initial fracn)
     set_pllchange(state);
 
     // Enable PLL
@@ -124,17 +121,41 @@ fn step(state: &mut SequencerState) {
 
     // Enable outputs
     state.rcc.pllcfgr().modify(|_, w| w.divp1en().enabled());
+
+    // This re-enables TIM with the correct new counter
+    set_timer(state);
+
+
 }
 
-fn set_dma_timer(state: &mut SequencerState) {
+fn set_timer(state: &mut SequencerState) {
+    let change = &state.pllchange_buffer[state.pllchangei as usize];
+
+    state.tim.cnt().modify(|_, w| w.set(change.tim_us));
+    state.tim.arr().modify(|_, w| w.set(change.tim_us));
+
+    state.fracn_rem = change.for_ticks - 1;
+    state.fracn_i = change.start_tick + 1;
+
+    // Launch the timer
+    state.tim.cr1().modify(|_, w| w.cen().enabled());
+
 }
 
 pub fn launch(state: &mut SequencerState) {
     stop(state);
-    set_dma_timer(state);
+    // Set up the PLL for the first state
+    state.pllchangei = -1;
+    state.is_running = true;
+
+    step(state);
+
 }
 
 pub fn stop(state: &mut SequencerState) {
+    if !state.is_running {
+        return;
+    }
 
 }
 
@@ -150,31 +171,25 @@ where
     })
 }
 
-pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2, dma: stm32h7s::GPDMA)
+pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2)
              -> &'static Mutex<RefCell<MaybeUninit<SequencerState>>> {
-    // Setup basic DMA
-    rcc.ahb1enr().modify(|_, w| w.gpdma1en().enabled());
-
     // Setup TIM2
     rcc.apb1lenr().modify(|_, w| w.tim2en().set_bit());
 
-    // Drive TIM2 with HSE, for reduced jitter
+    // Drive TIM2 with the system clock, divided by 120, such that each clock tick is 1us
+    // TODO: Change this if system clock changes!
+    tim.psc().modify(|_, w| w.set(120 - 1));
+    // Setup clock to count down, only trigger interrupts on update
+    tim.cr1().modify(|_, w| w
+        .dir().down()
+        .opm().disabled()
+        .urs().counter_only()
+        .arpe().disabled());
 
-    // Trigger DMA on tim2_trgo rising edge
-    dma.ch(0).tr2().modify(|_, w| unsafe {
-        w.trigpol().bits(1).trigsel().bits(47)
-    });
-
-    // Point DMA to write to RCC fracn
-    let rcc_addr = rcc.pll2fracr().as_ptr() as u32;
-    dma.ch(0).dar().modify(|_, w| unsafe {
-        w.da().bits(rcc_addr)
-    });
-
-    // Setup interrupts
-    dma.ch(0).cr().modify(|_, w| w.tcie().set_bit());
+    // Enable the update interrupt
+    tim.dier().modify(|_, w| w.uie().enabled());
     unsafe {
-        cortex_m::peripheral::NVIC::unmask(Interrupt::GPDMA1_CH0);
+        stm32h7s::NVIC::unmask(Interrupt::TIM2);
     }
 
     // The interrupt should not run now as TIM is disabled, but the guard is needed
@@ -185,7 +200,9 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2, dma: stm32h7s::GPDMA)
             pllchangei: 0,
             rcc,
             tim,
-            dma,
+            is_running: false,
+            fracn_rem: 0,
+            fracn_i: 0,
         }));
     });
 
@@ -197,13 +214,23 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2, dma: stm32h7s::GPDMA)
 }
 
 #[interrupt]
-unsafe fn GPDMA1_CH0() {
+fn TIM2() {
     with_state(&SEQUENCER_STATE, |state| {
-        if state.dma.ch(0).sr().read().tcf().bit_is_clear() {
-            return;
-        }
+        if state.tim.sr().read().uif().bit_is_set() {
+            state.tim.sr().modify(|_, w| w.uif().clear_bit());
 
-        step(state);
-        state.dma.ch(0).fcr().write(|w| w.tcf().set_bit());
-    });
+            // change fracn
+            let fracn = state.fracn_buffer[state.fracn_i];
+
+            state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().clear_bit());
+            state.rcc.pll2fracr().modify(|_, w| unsafe { w.fracn().bits(fracn) });
+            state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().set_bit());
+
+            state.fracn_i += 1;
+            state.fracn_rem -= 1;
+            if state.fracn_rem == 0 {
+                step(state);
+            }
+        }
+    })
 }

@@ -11,6 +11,7 @@ use cortex_m_rt::entry;
 use defmt::export::panic;
 use stm32h7::{stm32h7s};
 use stm32h7::stm32h7s::Interrupt::RCC;
+use crate::sequencer::PLLChange;
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
@@ -91,16 +92,34 @@ fn main() -> ! {
     periph.RCC.ahb4enr().modify(|_, w| w.gpioaen().enabled());
     periph.GPIOA.moder().modify(|_, w| w.mode8().alternate());
 
-    let sequencer_state = sequencer::setup(periph.RCC, periph.TIM2, periph.GPDMA);
+    let sequencer_state = sequencer::setup(periph.RCC, periph.TIM2);
 
     defmt::info!("Sequencer is setup!");
 
-    /*
     sequencer::with_state(sequencer_state, |state| {
+        let change = PLLChange {
+            for_ticks: 10,
+            start_tick: 0,
+            divn: 20 - 1,
+            vcosel: true,
+            divp: 30-1,
+            tim_us: 100000,
+        };
+
+        state.pllchange_buffer.push(change);
+        state.fracn_buffer.push(0);
+        state.fracn_buffer.push(65535);
+        state.fracn_buffer.push(0);
+        state.fracn_buffer.push(65535);
+        state.fracn_buffer.push(0);
+        state.fracn_buffer.push(65535);
+        state.fracn_buffer.push(0);
+        state.fracn_buffer.push(65535);
+        state.fracn_buffer.push(0);
+        state.fracn_buffer.push(65535);
+
         sequencer::launch(state);
-        sequencer::stop(state);
     });
-     */
 
     loop {
     }
