@@ -34,7 +34,7 @@ struct PLLChange {
     divn: u16,
     vcosel: bool,
     output_pre: u8,
-    div1m: u8,
+    divm: u8,
     tim_count: u16,
 }
 
@@ -50,21 +50,20 @@ pub struct SequencerState {
 fn set_pllchange(state: &mut SequencerState) {
     let change = &state.pllchange_buffer[state.pllchangei];
 
-    assert!(state.rcc.cr().read().pll1on().bit_is_clear());
+    assert!(state.rcc.cr().read().pll2on().bit_is_clear());
 
     // Predivider
-    state.rcc.pllckselr().modify(|_, w| w.divm1().set(change.div1m));
+    state.rcc.pllckselr().modify(|_, w| w.divm2().set(change.divm));
     // Output scaler
-    state.rcc.cfgr().modify(|_, w| w.mco1().pll1_q().mco1pre().set(1));
+    state.rcc.cfgr().modify(|_, w| w.mco2().pll2_p().mco2pre().set(1));
 }
 
 fn setup_pll(state: &mut SequencerState) {
     state.rcc.pllckselr().modify(|_, w| w.pllsrc().hse());
-    state.rcc.pllcfgr().modify(|_, w| w.pll1sscgen().set_bit());
+    state.rcc.pllcfgr().modify(|_, w| w.pll2sscgen().set_bit());
 
-    // Output PLL on MCO1, which can be connected to pll1_q_ck
-    // (MCO1 is the alternate function 0 for PA8)
-    state.rcc.cfgr().modify(|_, w| w.mco1().pll1_q().mco1pre().set(1));
+    // Output PLL on MCO2, which can be connected to pll2_p_ck
+    state.rcc.cfgr().modify(|_, w| w.mco2().pll2_p().mco2pre().set(1));
 }
 
 fn prepare_fracn_dma(state: &mut SequencerState) {
@@ -89,8 +88,8 @@ fn step(state: &mut SequencerState) {
     }
 
     // Disable the PLL and output
-    state.rcc.pllcfgr().modify(|_, w| w.divq1en().disabled());
-    state.rcc.cr().modify(|_, w| w.pll1on().clear_bit());
+    state.rcc.pllcfgr().modify(|_, w| w.divp2en().disabled());
+    state.rcc.cr().modify(|_, w| w.pll2on().clear_bit());
 
     // Prepare fracn for next run
     prepare_fracn_dma(state);
@@ -101,13 +100,13 @@ fn step(state: &mut SequencerState) {
     set_pllchange(state);
 
     // Enable PLL
-    state.rcc.cr().modify(|_, w| w.pll1on().set_bit());
+    state.rcc.cr().modify(|_, w| w.pll2on().set_bit());
 
     // Wait for PLL ready
-    while state.rcc.cr().read().pll1rdy().bit_is_clear() {}
+    while state.rcc.cr().read().pll2rdy().bit_is_clear() {}
 
     // Enable outputs
-    state.rcc.pllcfgr().modify(|_, w| w.divq1en().enabled());
+    state.rcc.pllcfgr().modify(|_, w| w.divp2en().enabled());
 }
 
 fn set_dma_timer(state: &mut SequencerState) {
@@ -139,7 +138,10 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2, dma: stm32h7s::GPDMA)
     // Setup basic DMA
     rcc.ahb1enr().modify(|_, w| w.gpdma1en().enabled());
 
-    // Setup TIM2, but don't enable
+    // Setup TIM2
+    rcc.apb1lenr().modify(|_, w| w.tim2en().set_bit());
+
+    // Drive TIM2 with HSE, for reduced jitter
 
     // Trigger DMA on tim2_trgo rising edge
     dma.ch(0).tr2().modify(|_, w| unsafe {
