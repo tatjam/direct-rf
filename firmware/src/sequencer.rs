@@ -16,7 +16,7 @@ use stm32h7::stm32h7s::{interrupt, Interrupt};
 
 static SEQUENCER_STATE: Mutex<RefCell<MaybeUninit<SequencerState>>> = Mutex::new(RefCell::new(MaybeUninit::uninit()));
 
-const MAX_SEQUENCE_LEN: usize = 128;
+const MAX_SEQUENCE_LEN: usize = 512;
 const MAX_DIVN_CHANGES: usize = 32;
 
 pub struct PLLChange {
@@ -135,7 +135,7 @@ fn set_timer(state: &mut SequencerState) {
     state.tim.arr().modify(|_, w| w.set(change.tim_us));
 
     state.fracn_rem = change.for_ticks - 1;
-    state.fracn_i = change.start_tick + 1;
+    state.fracn_i = change.start_tick;
 
     // Launch the timer
     state.tim.cr1().modify(|_, w| w.cen().enabled());
@@ -219,17 +219,19 @@ fn TIM2() {
         if state.tim.sr().read().uif().bit_is_set() {
             state.tim.sr().modify(|_, w| w.uif().clear_bit());
 
-            // change fracn
-            let fracn = state.fracn_buffer[state.fracn_i];
-
-            state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().clear_bit());
-            state.rcc.pll2fracr().modify(|_, w| unsafe { w.fracn().bits(fracn) });
-            state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().set_bit());
-
-            state.fracn_i += 1;
-            state.fracn_rem -= 1;
             if state.fracn_rem == 0 {
                 step(state);
+            } else {
+                state.fracn_i += 1;
+
+                // change fracn
+                let fracn = state.fracn_buffer[state.fracn_i];
+
+                state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().clear_bit());
+                state.rcc.pll2fracr().modify(|_, w| unsafe { w.fracn().bits(fracn) });
+                state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().set_bit());
+
+                state.fracn_rem -= 1;
             }
         }
     })

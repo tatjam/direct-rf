@@ -98,7 +98,7 @@ fn main() -> ! {
 
     sequencer::with_state(sequencer_state, |state| {
         let change = PLLChange {
-            for_ticks: 10,
+            for_ticks: 9,
             start_tick: 0,
             divn: 20 - 1,
             vcosel: true,
@@ -108,15 +108,14 @@ fn main() -> ! {
 
         state.pllchange_buffer.push(change);
         state.fracn_buffer.push(0);
-        state.fracn_buffer.push(65535);
-        state.fracn_buffer.push(0);
-        state.fracn_buffer.push(65535);
-        state.fracn_buffer.push(0);
-        state.fracn_buffer.push(65535);
-        state.fracn_buffer.push(0);
-        state.fracn_buffer.push(65535);
-        state.fracn_buffer.push(0);
-        state.fracn_buffer.push(65535);
+        state.fracn_buffer.push(1024);
+        state.fracn_buffer.push(2048);
+        state.fracn_buffer.push(3072);
+        state.fracn_buffer.push(4096);
+        state.fracn_buffer.push(5120);
+        state.fracn_buffer.push(6144);
+        state.fracn_buffer.push(7168);
+        state.fracn_buffer.push(8191);
 
         sequencer::launch(state);
     });
