@@ -34,7 +34,6 @@ struct PLLChange {
     divn: u16,
     vcosel: bool,
     output_pre: u8,
-    divm: u8,
     tim_count: u16,
 }
 
@@ -51,19 +50,37 @@ fn set_pllchange(state: &mut SequencerState) {
     let change = &state.pllchange_buffer[state.pllchangei];
 
     assert!(state.rcc.cr().read().pll2on().bit_is_clear());
-
-    // Predivider
-    state.rcc.pllckselr().modify(|_, w| w.divm2().set(change.divm));
-    // Output scaler
-    state.rcc.cfgr().modify(|_, w| w.mco2().pll2_p().mco2pre().set(1));
 }
 
 fn setup_pll(state: &mut SequencerState) {
-    state.rcc.pllckselr().modify(|_, w| w.pllsrc().hse());
-    state.rcc.pllcfgr().modify(|_, w| w.pll2sscgen().set_bit());
 
-    // Output PLL on MCO2, which can be connected to pll2_p_ck
+    // Output PLL on MCO2, dividing the PLL VCO freq as convenient
     state.rcc.cfgr().modify(|_, w| w.mco2().pll2_p().mco2pre().set(1));
+    state.rcc.pllcfgr().modify(|_, w| w.divp2en().enabled());
+
+    // Input clock is HSE, which is 24MHz, and we drive the PLL
+    // with 12MHz, because it's outside the band of interest and
+    // is overall a pretty nice number (its divisible by 1, 2, 3, 4, 6 and 12)
+    // which allows us to obtain neat round frequencies without the ΣΔ modulator.
+    state.rcc.pllckselr().modify(|_, w| w.divm2().set(2).pllsrc().hse());
+    state.rcc.pllcfgr().modify(|_, w| w.pll2rge().range8());
+
+    // Use the 150 to 420MHz VCO for default settings
+    state.rcc.pllcfgr().modify(|_, w| w.pll2vcosel().set_bit());
+
+    // 12 MHz of reference are multiplied by 20 to get 240MHz on the VCO,
+    // which are then divided by 30 to get 8Mhz on the p output
+    state.rcc.pll2divr1().modify(|_, w| unsafe { w.divn2().bits(20 - 1).divp().bits(30-1) });
+
+    // Enable PLL and wait for ready TODO: REMOVE
+    state.rcc.cr().modify(|_, w| w.pll2on().set_bit());
+
+    // Wait for PLL ready
+    while state.rcc.cr().read().pll2rdy().bit_is_clear() {}
+
+    defmt::info!("PLL2 is ready!");
+
+
 }
 
 fn prepare_fracn_dma(state: &mut SequencerState) {
@@ -106,7 +123,7 @@ fn step(state: &mut SequencerState) {
     while state.rcc.cr().read().pll2rdy().bit_is_clear() {}
 
     // Enable outputs
-    state.rcc.pllcfgr().modify(|_, w| w.divp2en().enabled());
+    state.rcc.pllcfgr().modify(|_, w| w.divp1en().enabled());
 }
 
 fn set_dma_timer(state: &mut SequencerState) {
@@ -149,7 +166,7 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2, dma: stm32h7s::GPDMA)
     });
 
     // Point DMA to write to RCC fracn
-    let rcc_addr = rcc.pll1fracr().as_ptr() as u32;
+    let rcc_addr = rcc.pll2fracr().as_ptr() as u32;
     dma.ch(0).dar().modify(|_, w| unsafe {
         w.da().bits(rcc_addr)
     });
@@ -170,6 +187,10 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2, dma: stm32h7s::GPDMA)
             tim,
             dma,
         }));
+    });
+
+    with_state(&SEQUENCER_STATE, |state| {
+        setup_pll(state);
     });
 
     &SEQUENCER_STATE
