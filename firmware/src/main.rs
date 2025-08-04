@@ -4,13 +4,13 @@
 mod comm;
 mod comm_messages;
 mod sequencer;
+mod util;
 
 use defmt_rtt as _;
 use panic_probe as _;
 use cortex_m_rt::entry;
 use defmt::export::panic;
 use stm32h7::{stm32h7s};
-use stm32h7::stm32h7s::Interrupt::RCC;
 use crate::sequencer::PLLChange;
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
@@ -96,7 +96,7 @@ fn main() -> ! {
 
     defmt::info!("Sequencer is setup!");
 
-    sequencer::with_state(sequencer_state, |state| {
+    util::with(sequencer_state, |state| {
         let change = PLLChange {
             for_ticks: 9,
             start_tick: 0,

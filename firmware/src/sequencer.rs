@@ -2,19 +2,16 @@
     The sequencer uses TIM to drive the PLL at desired frequencies automatically, without any
     significant software effects on timing.
  */
-use core::cell::{Ref, RefCell};
+use core::cell::{RefCell};
 use core::mem::MaybeUninit;
-use core::ops::Div;
-use core::ptr::{null, null_mut};
 use cortex_m::interrupt::Mutex;
 use stm32h7::{stm32h7s};
 use heapless::Vec;
-use cortex_m::singleton;
-
-use serde::de::Unexpected::Seq;
 use stm32h7::stm32h7s::{interrupt, Interrupt};
+use crate::util;
+use crate::util::InterruptAccessible;
 
-static SEQUENCER_STATE: Mutex<RefCell<MaybeUninit<SequencerState>>> = Mutex::new(RefCell::new(MaybeUninit::uninit()));
+static SEQUENCER_STATE: InterruptAccessible<SequencerState> = InterruptAccessible::new();
 
 const MAX_SEQUENCE_LEN: usize = 512;
 const MAX_DIVN_CHANGES: usize = 32;
@@ -159,20 +156,8 @@ pub fn stop(state: &mut SequencerState) {
 
 }
 
-#[inline]
-pub fn with_state<F, R>(state: &Mutex<RefCell<MaybeUninit<SequencerState>>>, f: F) -> R
-where
-    F: FnOnce(&mut SequencerState) -> R,
-{
-    cortex_m::interrupt::free(|cs| {
-        unsafe {
-            f(&mut state.borrow(cs).borrow_mut().assume_init_mut())
-        }
-    })
-}
-
 pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2)
-             -> &'static Mutex<RefCell<MaybeUninit<SequencerState>>> {
+             -> &'static InterruptAccessible<SequencerState> {
     // Setup TIM2
     rcc.apb1lenr().modify(|_, w| w.tim2en().set_bit());
 
@@ -206,7 +191,7 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2)
         }));
     });
 
-    with_state(&SEQUENCER_STATE, |state| {
+    util::with(&SEQUENCER_STATE, |state| {
         setup_pll(state);
     });
 
@@ -215,7 +200,7 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2)
 
 #[interrupt]
 fn TIM2() {
-    with_state(&SEQUENCER_STATE, |state| {
+    util::with(&SEQUENCER_STATE, |state| {
         if state.tim.sr().read().uif().bit_is_set() {
             state.tim.sr().modify(|_, w| w.uif().clear_bit());
 
