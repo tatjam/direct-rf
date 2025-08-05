@@ -1,18 +1,26 @@
-use core::cell::{Ref, RefCell};
+use core::cell::{Cell, Ref, RefCell, UnsafeCell};
 use core::mem::MaybeUninit;
+use core::ptr;
 use cortex_m::interrupt::Mutex;
 use heapless::Vec;
 use stm32h7::{stm32h7s};
 use stm32h7::stm32h7s::interrupt;
 use crate::util;
-use crate::util::{InterruptAccessible, RingBuffer};
+use crate::util::{with, InterruptAccessible, RingBuffer, SingleThreadUnsafeCell};
 
 static COMM_STATE: InterruptAccessible<CommState> = InterruptAccessible::new();
 
+type TXRingBuffer = RingBuffer<u8, 512>;
+type RXRingBuffer = RingBuffer<u8, 512>;
+
+// Raw pointers to the rx and tx buffers, which handle "thread" safety on their own.
+static mut RX_BUFFER: *const RXRingBuffer = ptr::null();
+static mut TX_BUFFER: *const RXRingBuffer = ptr::null();
+
 struct CommState {
     usart: stm32h7s::USART3,
-    tx_buffer: RingBuffer<u8, 512>,
-    rx_buffer: RingBuffer<u8, 512>,
+    tx_buffer: TXRingBuffer,
+    rx_buffer: RXRingBuffer,
 }
 
 // Initiates a transfer of bytes, possibly blocking if the tx buffer gets full
@@ -66,6 +74,12 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
     });
 
     util::with(&COMM_STATE, |state| {
+        unsafe {
+            // It's safe to take these pointers as they point to static memory and the RingBuffer
+            // handles "thread safety" for us.
+            RX_BUFFER = &state.rx_buffer;
+            TX_BUFFER = &state.tx_buffer;
+        }
         // Finally, enable USART, receiver and transmitter, and receiver interrupt
         // Transmitter interrupt is enabled as needed
         state.usart.cr1().modify(|_, w| w
@@ -76,10 +90,48 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
     });
 
 
+
     &COMM_STATE
 }
 
-#[interrupt]
-unsafe fn USART3() {
+#[inline]
+fn usart3_rxff(rx_buffer: &RXRingBuffer) {
 
+}
+
+#[inline]
+fn usart3_txfe(tx_buffer: &TXRingBuffer) {
+
+}
+
+// This interrupt is designed to block as little as possible, in order to allow nearly
+// parallel receiving of information and processing.
+#[interrupt]
+fn USART3() {
+
+    // rxff = RX FIFO Full
+    // txfe = TX FIFO Empty
+    let (rxff, txfe) = util::with(&COMM_STATE, |state| {(
+        state.usart.isr().read().rxff().bit_is_set(),
+        state.usart.isr().read().txfe().bit_is_set()
+    )});
+
+    assert!(rxff || txfe);
+
+    let (rx_buffer, tx_buffer) = unsafe {(
+        // This is safe, as the ring buffers handle "thread safety" and are static, const variables
+        // (They do have interior mutability!)
+        &RX_BUFFER.read(),
+        &TX_BUFFER.read()
+    )};
+
+    if rxff {
+        usart3_rxff(rx_buffer);
+    }
+
+    if txfe {
+        usart3_txfe(rx_buffer);
+    }
+
+    // Note that the interrupt flags are cleared upon emptying of RX FIFO, or filling of TX FIFO!
 }

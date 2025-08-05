@@ -1,8 +1,12 @@
-use core::cell::{Cell, RefCell, UnsafeCell};
+use core::cell::{Cell, RefCell};
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 use cortex_m::interrupt::Mutex;
 use heapless::Vec;
+
+// Because we are in a single-threaded environment, this is safe
+pub struct SingleThreadUnsafeCell<T>(pub core::cell::UnsafeCell<T>);
+unsafe impl<T> Sync for SingleThreadUnsafeCell<T> {}
 
 pub struct InterruptAccessible<T>(Mutex<RefCell<MaybeUninit<T>>>);
 
@@ -39,7 +43,7 @@ struct RingBufferPtrs {
 }
 
 pub struct RingBuffer<T: Default + Copy, const Len: usize> {
-    data: UnsafeCell<[T; Len]>,
+    data: SingleThreadUnsafeCell<[T; Len]>,
     read_write_ptrs: Mutex<Cell<RingBufferPtrs>>,
 }
 
@@ -65,7 +69,7 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
             unsafe {
                 // SAFETY: This is safe, because no reading may take place to the right of write buffer,
                 // atleast until reaching read ptr
-                target[*num_read] = (*self.data.get())[ptrs.read];
+                target[*num_read] = (*self.data.0.get())[ptrs.read];
             }
 
             *num_read += 1;
@@ -128,7 +132,7 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
             unsafe {
                 // SAFETY: This is safe, because no reading may take place to the right of write buffer,
                 // atleast until reaching read ptr
-                (*self.data.get())[ptrs.write] = data[*num_written];
+                (*self.data.0.get())[ptrs.write] = data[*num_written];
             }
 
             *num_written += 1;
@@ -166,7 +170,7 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
 
     pub fn new() -> Self {
         Self {
-            data: UnsafeCell::new([T::default(); Len]),
+            data: SingleThreadUnsafeCell{0: core::cell::UnsafeCell::new([T::default(); Len])},
             read_write_ptrs: Mutex::new(Cell::new(RingBufferPtrs {
                 read: 0,
                 write: 0,
