@@ -3,15 +3,16 @@ use core::mem::MaybeUninit;
 use cortex_m::interrupt::Mutex;
 use heapless::Vec;
 use stm32h7::{stm32h7s};
+use stm32h7::stm32h7s::interrupt;
 use crate::util;
-use crate::util::InterruptAccessible;
+use crate::util::{InterruptAccessible, RingBuffer};
 
 static COMM_STATE: InterruptAccessible<CommState> = InterruptAccessible::new();
 
 struct CommState {
     usart: stm32h7s::USART3,
-    tx_buffer: Vec<u8, 128>,
-    rx_buffer: Vec<u8, 128>,
+    tx_buffer: RingBuffer<u8, 512>,
+    rx_buffer: RingBuffer<u8, 512>,
 }
 
 // Initiates a transfer of bytes, possibly blocking if the tx buffer gets full
@@ -58,7 +59,9 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
 
     cortex_m::interrupt::free( |cs| {
         COMM_STATE.borrow(cs).replace(MaybeUninit::new(CommState{
-            usart
+            usart,
+            tx_buffer: RingBuffer::new(),
+            rx_buffer: RingBuffer::new()
         }));
     });
 
@@ -66,7 +69,7 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
         // Finally, enable USART, receiver and transmitter, and receiver interrupt
         // Transmitter interrupt is enabled as needed
         state.usart.cr1().modify(|_, w| w
-            .rxneie().enabled()
+            .rxffie().enabled()
             .ue().enabled()
             .re().enabled()
             .te().enabled());
@@ -74,4 +77,9 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
 
 
     &COMM_STATE
+}
+
+#[interrupt]
+unsafe fn USART3() {
+
 }
