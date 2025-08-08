@@ -8,27 +8,16 @@ use cortex_m::interrupt::Mutex;
 use stm32h7::{stm32h7s};
 use heapless::Vec;
 use stm32h7::stm32h7s::{interrupt, Interrupt};
+use common::sequence::Sequence;
 use crate::util;
 use crate::util::InterruptAccessible;
 
 static SEQUENCER_STATE: InterruptAccessible<SequencerState> = InterruptAccessible::new();
 
-const MAX_SEQUENCE_LEN: usize = 512;
-const MAX_DIVN_CHANGES: usize = 32;
 
-pub struct PLLChange {
-    pub for_ticks: usize,
-    pub start_tick: usize,
-    pub divn: u16,
-    pub vcosel: bool,
-    pub divp: u8,
-    // WARNING: Only us if timer prescaler is properly configured
-    pub tim_us: u32,
-}
 
 pub struct SequencerState {
-    pub fracn_buffer: Vec<u16, MAX_SEQUENCE_LEN>,
-    pub pllchange_buffer: Vec<PLLChange, MAX_DIVN_CHANGES>,
+    seq: Sequence,
     pllchangei: isize,
     tim: stm32h7s::TIM2,
     rcc: stm32h7s::RCC,
@@ -41,7 +30,7 @@ pub struct SequencerState {
 
 fn set_pllchange(state: &mut SequencerState) {
     assert!(state.rcc.cr().read().pll2on().bit_is_clear());
-    let change = &state.pllchange_buffer[state.pllchangei as usize];
+    let change = &state.seq.pllchange_buffer[state.pllchangei as usize];
 
     // Output PLL on MCO2, dividing the PLL VCO freq as convenient
     state.rcc.cfgr().modify(|_, w| w.mco2().pll2_p().mco2pre().set(1));
@@ -50,7 +39,7 @@ fn set_pllchange(state: &mut SequencerState) {
     state.rcc.pll2divr1().modify(|_, w| unsafe { w.divn2().bits(change.divn).divp().bits(change.divp) });
 
     // Set the fracn initial value
-    let fracn0 = state.fracn_buffer[change.start_tick];
+    let fracn0 = state.seq.fracn_buffer[change.start_tick];
     state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().clear_bit());
     state.rcc.pll2fracr().modify(|_, w| unsafe { w.fracn().bits(fracn0) });
     state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().set_bit());
@@ -95,7 +84,7 @@ fn step(state: &mut SequencerState) {
     state.pllchangei = state.pllchangei + 1;
     assert!(state.pllchangei >= 0);
 
-    if state.pllchangei as usize == state.pllchange_buffer.len() {
+    if state.pllchangei as usize == state.seq.pllchange_buffer.len() {
         // We ran out of the buffer, restart
         state.pllchangei = 0;
     }
@@ -126,7 +115,7 @@ fn step(state: &mut SequencerState) {
 }
 
 fn set_timer(state: &mut SequencerState) {
-    let change = &state.pllchange_buffer[state.pllchangei as usize];
+    let change = &state.seq.pllchange_buffer[state.pllchangei as usize];
 
     state.tim.cnt().modify(|_, w| w.set(change.tim_us));
     state.tim.arr().modify(|_, w| w.set(change.tim_us));
@@ -180,8 +169,10 @@ pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2)
     // The interrupt should not run now as TIM is disabled, but the guard is needed
     cortex_m::interrupt::free( |cs| {
         SEQUENCER_STATE.borrow(cs).replace(MaybeUninit::new(SequencerState{
-            fracn_buffer: Vec::new(),
-            pllchange_buffer: Vec::new(),
+            seq: Sequence{
+                fracn_buffer: Vec::new(),
+                pllchange_buffer: Vec::new(),
+            },
             pllchangei: 0,
             rcc,
             tim,
@@ -210,7 +201,7 @@ fn TIM2() {
                 state.fracn_i += 1;
 
                 // change fracn
-                let fracn = state.fracn_buffer[state.fracn_i];
+                let fracn = state.seq.fracn_buffer[state.fracn_i];
 
                 state.rcc.pllcfgr().modify(|_, w| w.pll2fracen().clear_bit());
                 state.rcc.pll2fracr().modify(|_, w| unsafe { w.fracn().bits(fracn) });

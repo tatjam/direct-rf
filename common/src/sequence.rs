@@ -1,0 +1,19 @@
+use heapless::Vec;
+
+pub const MAX_SEQUENCE_LEN: usize = 512;
+pub const MAX_DIVN_CHANGES: usize = 32;
+
+pub struct PLLChange {
+    pub for_ticks: usize,
+    pub start_tick: usize,
+    pub divn: u16,
+    pub vcosel: bool,
+    pub divp: u8,
+    // WARNING: Only us if timer prescaler is properly configured
+    pub tim_us: u32,
+}
+
+pub struct Sequence {
+    pub fracn_buffer: Vec<u16, MAX_SEQUENCE_LEN>,
+    pub pllchange_buffer: Vec<PLLChange, MAX_DIVN_CHANGES>,
+}
