@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::{env, fs};
 use std::time::{Instant};
 use serialport::{SerialPort, SerialPortType};
@@ -5,19 +6,19 @@ use regex::Regex;
 use common::sequence::{PLLChange, Sequence};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use log::warn;
+use pico_args;
+use chrono;
+
 // Pseudorandom sequence (PRSeq) generation:
 // A file is used to read the "order frequencies" (used to fine-tune the system),
 // which specifies a series of intervals in time and frequency where a
 // PRSeq in frequency is generated.
 // The pseudorandomness of the sequence is further made time-dependent by the time seed.
-// Each sequence is seeded by the Galileo epoch at the time of its start, flooring said start
-// time to intervals of TIME_SEED_ROUND_S seconds.
-// This guarantees that receivers and emitters don't need an excessively well synchronized
-// clock. Sequences are started as closely to the start of the floored galileo epoch as possible
-// (by the local clock time)
+// Each sequenced is seeded by the hash of the UTC time of the biggest multiple of
+// TIME_SEED_ROUND_S seconds that's before the start of the sequence. This rounding
+// reduces dependency on very precise clock.
 
-const TIME_SEED_ROUND_S: f64 = 10.0;
+const TIME_SEED_ROUND_S: i64 = 10;
 const FREF_HZ: f64 = 12_000_000.0;
 
 fn find_port() -> Result<String, &'static str> {
@@ -47,7 +48,7 @@ struct FrequencyOrder {
     n: usize,
 }
 
-fn parse_freqs(file: String) -> Result<Vec<FrequencyOrder>, &'static str> {
+fn parse_orders(file: String) -> Result<Vec<FrequencyOrder>, &'static str> {
     let r = Regex::new(r"(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)").unwrap();
     let mut out: Vec<FrequencyOrder> = Vec::new();
     let mut lines = file.lines();
@@ -104,7 +105,7 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
     } else if min_vcofreq_0 >= VCOSEL0_MIN_FREQ && max_vcofreq_0 <= VCOSEL0_MAX_FREQ {
         false
     } else {
-       return Err("No VCO configuration satisfies desired frequency range");
+        return Err("No VCO configuration satisfies desired frequency range");
     };
 
     let divn = divnf as u16;
@@ -122,7 +123,7 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
         let fac = rng.random::<f64>() - 0.5;
         let freq = order.freq_Hz as f64 + fac * (order.bandwidth_Hz as f64);
         // Actual fout = fref * (divn + 1 + fracn/2^13) / divp, so we find
-        let fracnf = 8192.0 * ((freq + divpf * freq) / FREF_HZ - 1.0 - divnf);
+        let fracnf = 8192.0 * (divpf * freq - FREF_HZ - divnf * FREF_HZ) / FREF_HZ;
         let fracn = if fracnf < 0.0 {
             log::warn!("fracn went below 0, clamping");
             0
@@ -168,20 +169,86 @@ fn build_sequence(orders: Vec<FrequencyOrder>, seed: u64) -> Result<Sequence, &'
     Ok(out)
 }
 
-fn get_seed(time: Instant) -> u32 {
-    0
+fn find_start_epoch(date: chrono::DateTime<chrono::Utc>) -> i64 {
+    // We add a bit of margin, to prevent the hypothetical case of starting a few milliseconds
+    // before the next epoch and not having enough time to send the stuff to the transmitter
+    const MARGIN_S: i64 = 1;
+    ((date.timestamp() + MARGIN_S) / TIME_SEED_ROUND_S) * TIME_SEED_ROUND_S + TIME_SEED_ROUND_S
+}
+
+// Returns unix epoch (in f64 seconds) - frequency pairs (in Hz)
+// This function has some fine-tuning parameters to match the timing of the actual transmitter!
+fn build_frequencies(seq: &Sequence, start_timestamp: i64) -> Vec<(f64, f64)> {
+    const PLLCHANGE_S: f64 = 5e-6;
+
+    let mut out = Vec::new();
+    let mut t = start_timestamp as f64;
+
+    for change in seq.pllchange_buffer.iter() {
+        t += PLLCHANGE_S;
+        for i in 0..change.for_ticks {
+            let fracn = seq.fracn_buffer[change.start_tick + i] as f64;
+            let divn = change.divn as f64;
+            let divp = change.divp as f64;
+            let freq = FREF_HZ * (divn + 1.0 + fracn / 8192.0) / (divp + 1.0);
+            out.push((t, freq));
+            t += change.tim_us as f64 * 1e-6;
+        }
+    }
+
+    out
+}
+
+fn frequencies_to_str(freqs: &Vec<(f64, f64)>) -> String {
+    let mut out = String::new();
+
+    for freq in freqs {
+        writeln!(&mut out, "{:.6},{:.6}", freq.0, freq.1).unwrap();
+    }
+
+    out
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let freqs_path = if(args.len() < 2) {
-        String::from("freqs.csv")
-    } else {
-        args[1].clone()
-    };
+    let mut pargs = pico_args::Arguments::from_env();
 
-    let freqs = parse_freqs(fs::read_to_string(freqs_path).unwrap()).unwrap();
-    let port = find_port().unwrap();
+    // Only generate the time-freq CSV, don't do anything with the serial ports
+    let dry = pargs.contains(["-", "--dry"]);
+    if dry {
+        println!("Running in dry mode");
+    }
+
+
+    let orders_path: String = pargs.opt_free_from_str()
+        .unwrap().unwrap_or(String::from("orders.csv"));
+
+    let out_path: String = pargs.opt_value_from_str("--out")
+        .unwrap().unwrap_or(String::from("freqs.csv"));
+
+    let orders = parse_orders(fs::read_to_string(orders_path).unwrap()).unwrap();
+    println!("Read {} orders", orders.len());
+
+    let date_str: Option<String> = pargs.opt_value_from_str("--date").unwrap();
+    let date = match date_str {
+        None => chrono::Utc::now(),
+        Some(str) =>
+            chrono::DateTime::parse_from_rfc2822(str.as_str()).unwrap().to_utc(),
+    };
+    let start_epoch = find_start_epoch(date);
+    println!("Sequence will start at epoch {}, which is {}s from now", start_epoch,
+             start_epoch - chrono::Utc::now().timestamp());
+
+    // Note that this seeding is good enough as rand does some "entropy increasing" on the seed
+    let seq = build_sequence(orders, start_epoch as u64).unwrap();
+    println!("Built sequence with {} pll changes and {} fracn values",
+             seq.pllchange_buffer.len(), seq.fracn_buffer.len());
+    let freqs = build_frequencies(&seq, start_epoch);
+    fs::write(&out_path, frequencies_to_str(&freqs)).unwrap();
+    println!("Written frequencies to file {}", out_path);
+
+    if !dry {
+        let port = find_port().unwrap();
+    }
 
 
 }
