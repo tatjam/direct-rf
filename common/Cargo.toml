@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 heapless = "0.8.0"
+serde = { version = "1.0.0", default-features = false }
+postcard = "1.0.0"
