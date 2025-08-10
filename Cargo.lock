@@ -704,6 +704,7 @@ dependencies = [
  "heapless 0.8.0",
  "log",
  "pico-args",
+ "postcard",
  "rand",
  "rand_chacha",
  "regex",

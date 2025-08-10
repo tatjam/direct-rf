@@ -18,9 +18,3 @@ pub enum UplinkMsg {
     EpochNow(i64),
     StartAtEpoch(i64),
 }
-
-#[derive(Serialize, Deserialize)]
-pub enum DownlinkMsg {
-    Ack(),
-    Unack(),
-}

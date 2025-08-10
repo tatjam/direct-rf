@@ -4,7 +4,7 @@ use heapless::Vec;
 use stm32h7::{stm32h7s};
 use stm32h7::stm32h7s::interrupt;
 use crate::util::{with, InterruptAccessible, RingBuffer};
-use common::comm_messages::{DownlinkMsg, UplinkMsg, MAX_UPLINK_MSG_SIZE};
+use common::comm_messages::{UplinkMsg, MAX_UPLINK_MSG_SIZE};
 
 static COMM_STATE: InterruptAccessible<CommState> = InterruptAccessible::new();
 
@@ -13,18 +13,22 @@ type RXRingBuffer = RingBuffer<u8, 512>;
 
 // Raw pointers to the rx and tx buffers, which handle "thread" safety on their own.
 static mut RX_BUFFER: *const RXRingBuffer = ptr::null();
-static mut TX_BUFFER: *const RXRingBuffer = ptr::null();
 
 pub struct CommState {
     usart: stm32h7s::USART3,
-    tx_buffer: TXRingBuffer,
     rx_buffer: RXRingBuffer,
     msg_buffer: [u8; MAX_UPLINK_MSG_SIZE],
     msg_buffer_ptr: usize,
 }
 
-// Initiates a transfer of bytes, possibly blocking if the tx buffer gets full
-fn tx(state: &mut CommState, bytes: &[u8]) {
+fn ack(state: &CommState) {
+    while state.usart.isr().read().txfnf().bit_is_clear() {}
+    state.usart.tdr().write(|w| unsafe{ w.bits(1) });
+}
+
+fn nack(state: &CommState) {
+    while state.usart.isr().read().txfnf().bit_is_clear() {}
+    state.usart.tdr().write(|w| unsafe{ w.bits(0) });
 }
 
 // We use USART3, as it's connected to the VCOM port thanks to ST-Link
@@ -71,7 +75,6 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
     cortex_m::interrupt::free( |cs| {
         COMM_STATE.borrow(cs).replace(MaybeUninit::new(CommState{
             usart,
-            tx_buffer: RingBuffer::new(),
             rx_buffer: RingBuffer::new(),
             msg_buffer: [0; MAX_UPLINK_MSG_SIZE],
             msg_buffer_ptr: 0,
@@ -83,7 +86,6 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
             // It's safe to take these pointers as they point to static memory and the RingBuffer
             // handles "thread safety" for us.
             RX_BUFFER = &state.rx_buffer;
-            TX_BUFFER = &state.tx_buffer;
         }
         // Enable RX interrupt
         state.usart.cr3().modify(|_, w| w.rxftie().enabled());
@@ -124,11 +126,9 @@ fn try_decode_message(buff: &mut [u8]) -> Option<UplinkMsg> {
     let result = postcard::from_bytes_cobs(buff);
     match result {
         Ok(msg) => {
-            // Send Ack
             msg
         },
         Err(err) => {
-            // Send Unack, this will likely trigger a resend of the message
             None
         }
     }
@@ -145,7 +145,13 @@ pub fn get_message(state: &mut CommState) -> Option<UplinkMsg> {
 
     if state.msg_buffer[state.msg_buffer_ptr - 1] == 0 {
         // Note this does not include the final 0
-        try_decode_message(&mut state.msg_buffer[0..state.msg_buffer_ptr])
+        let msg = try_decode_message(&mut state.msg_buffer[0..state.msg_buffer_ptr]);
+        defmt::info!("Received msg of kind {}", msg);
+        match msg {
+            Some(_) => { ack(state); },
+            None => { nack(state); }
+        };
+        msg
     } else {
         None
     }
@@ -162,29 +168,19 @@ fn usart3_txfe(tx_buffer: &TXRingBuffer) {
 #[interrupt]
 fn USART3() {
 
-    // rxff = RX FIFO Full
-    // txfe = TX FIFO Empty
-    let (rxft, txfe) = with(&COMM_STATE, |state| {(
-        state.usart.isr().read().rxft().bit_is_set(),
-        state.usart.isr().read().txfe().bit_is_set()
-    )});
+    let rxft = with(&COMM_STATE, |state| {
+        state.usart.isr().read().rxft().bit_is_set()
+    });
 
-    assert!(rxft || txfe);
-
-    let (rx_buffer, tx_buffer) = unsafe {(
+    let rx_buffer = unsafe {
         // This is safe, as the ring buffers handle "thread safety" and are static, const variables
         // (They do have interior mutability!)
-        &RX_BUFFER.read(),
-        &TX_BUFFER.read()
-    )};
+        &RX_BUFFER.read()
+    };
 
     if rxft {
         usart3_rxft(rx_buffer);
     }
 
-    if txfe {
-        usart3_txfe(rx_buffer);
-    }
-
-    // Note that the interrupt flags are cleared upon emptying of RX FIFO, or filling of TX FIFO!
+    // Note that the interrupt flags are cleared upon emptying of RX FIFO
 }

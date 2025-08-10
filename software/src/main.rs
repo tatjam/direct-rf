@@ -1,13 +1,15 @@
 use std::fmt::Write;
 use std::{fs};
-use serialport::{SerialPort, SerialPortType};
+use std::io::{Read};
+use std::time::Instant;
+use serialport::{ClearBuffer, SerialPort, SerialPortType};
 use regex::Regex;
 use common::sequence::{PLLChange, Sequence};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use pico_args;
 use chrono;
-
+use common::comm_messages::{UplinkMsg};
 // Pseudorandom sequence (PRSeq) generation:
 // A file is used to read the "order frequencies" (used to fine-tune the system),
 // which specifies a series of intervals in time and frequency where a
@@ -25,7 +27,6 @@ fn find_port() -> Result<String, &'static str> {
     for port in ports {
         match port.port_type {
             SerialPortType::UsbPort(info) => {
-
                 return Ok(port.port_name);
             }
             _ => {
@@ -175,6 +176,13 @@ fn find_start_epoch(date: chrono::DateTime<chrono::Utc>) -> i64 {
     ((date.timestamp() + MARGIN_S) / TIME_SEED_ROUND_S) * TIME_SEED_ROUND_S + TIME_SEED_ROUND_S
 }
 
+fn encode(msg: &UplinkMsg) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    buffer.resize(common::comm_messages::MAX_UPLINK_MSG_SIZE, 0);
+    let slice = postcard::to_slice_cobs(msg, buffer.as_mut_slice()).unwrap();
+    slice.to_vec()
+}
+
 // Returns unix epoch (in f64 seconds) - frequency pairs (in Hz)
 // This function has some fine-tuning parameters to match the timing of the actual transmitter!
 fn build_frequencies(seq: &Sequence, start_timestamp: i64) -> Vec<(f64, f64)> {
@@ -206,6 +214,35 @@ fn frequencies_to_str(freqs: &Vec<(f64, f64)>) -> String {
     }
 
     out
+}
+
+// Tries to send data, waiting for acknowledge and retrying
+fn send(mut port: Box<dyn SerialPort>, data: &[u8]) -> Result<(), &'static str> {
+    const RETRIES: usize = 4;
+    const TIMEOUT_S: f64 = 0.5;
+
+    port.clear(ClearBuffer::Input).unwrap();
+
+    let mut numtry = 0;
+    let start_time = Instant::now();
+
+    while numtry < RETRIES {
+        port.write(data).unwrap();
+        port.flush();
+
+        let mut read_buffer: [u8; 1] = [0];
+        while port.read(&mut read_buffer).expect("I/O failure") == 0
+            && Instant::now().duration_since(start_time).as_secs_f64() < TIMEOUT_S { }
+
+        if read_buffer[0] == 0 {
+            // no ack, try again...
+        } else {
+            return Ok(());
+        }
+        numtry += 1;
+    }
+
+    Err("Timed out")
 }
 
 fn main() {
@@ -246,7 +283,11 @@ fn main() {
     println!("Written frequencies to file {}", out_path);
 
     if !dry {
-        let port = find_port().unwrap();
+        let port_name = find_port().unwrap();
+        let port = serialport::new(port_name, 115_200).open().expect("Failed to open STM32 port");
+
+        // Send the sequence
+
     }
 
 

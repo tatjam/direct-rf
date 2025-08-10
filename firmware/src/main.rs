@@ -10,7 +10,7 @@ use panic_probe as _;
 use cortex_m_rt::entry;
 use defmt::export::panic;
 use stm32h7::{stm32h7s};
-use common::comm_messages::{DownlinkMsg, UplinkMsg};
+use common::comm_messages::{UplinkMsg};
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
