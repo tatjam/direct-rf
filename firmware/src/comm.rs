@@ -2,7 +2,7 @@ use core::mem::MaybeUninit;
 use core::{ptr};
 use heapless::Vec;
 use stm32h7::{stm32h7s};
-use stm32h7::stm32h7s::interrupt;
+use stm32h7::stm32h7s::{interrupt, Interrupt};
 use crate::util::{with, InterruptAccessible, RingBuffer};
 use common::comm_messages::{UplinkMsg, MAX_UPLINK_MSG_SIZE};
 
@@ -15,10 +15,9 @@ type RXRingBuffer = RingBuffer<u8, 512>;
 static mut RX_BUFFER: *const RXRingBuffer = ptr::null();
 
 pub struct CommState {
-    usart: stm32h7s::USART3,
+    pub usart: stm32h7s::USART3,
     rx_buffer: RXRingBuffer,
-    msg_buffer: [u8; MAX_UPLINK_MSG_SIZE],
-    msg_buffer_ptr: usize,
+    msg_buffer: [u8; MAX_UPLINK_MSG_SIZE], msg_buffer_ptr: usize,
 }
 
 fn ack(state: &CommState) {
@@ -32,10 +31,20 @@ fn nack(state: &CommState) {
 }
 
 // We use USART3, as it's connected to the VCOM port thanks to ST-Link
-pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
+pub fn setup(rcc: &mut stm32h7s::RCC, gpiod: &stm32h7s::GPIOD, usart: stm32h7s::USART3)
              -> &'static InterruptAccessible<CommState> {
 
+    // Enable the GPIOs used, set them to alternate function and point them to USART3
     rcc.apb1lenr().modify(|_, w| w.usart3en().enabled());
+
+    rcc.ahb4enr().modify(|_, w| w.gpioden().enabled());
+    gpiod.moder().modify(|_, w| w
+        .mode8().alternate()
+        .mode9().alternate());
+    gpiod.afrh().modify(|_, w| w
+        .afrel8().af7()
+        .afrel9().af7());
+
 
     // 115200bps, 8bit-data, no parity, one stop bit, no flow control, per the
     // NUCLEO board docs.
@@ -50,9 +59,9 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
     rcc.pllcfgr().modify(|_, w| w.pll3rge().range8());
 
     // Use the 384 to 1672MHz VCO
-    rcc.pllcfgr().modify(|_, w| w.pll3vcosel().clear_bit());
+    rcc.pllcfgr().modify(|_, w| w.pll3vcosel().wide_vco());
     // This makes the VCO oscillate at 1152MHz, and output a signal at exactly 115.2MHz
-    rcc.pll3divr1().modify(|_, w| unsafe {w.divn3().bits(96).divq().bits(5 - 1)});
+    rcc.pll3divr1().modify(|_, w| unsafe {w.divn3().bits(96 - 1).divq().bits(10 - 1)});
     // Enable DIVQ output
     rcc.pllcfgr().modify(|_, w| w.divq3en().enabled());
 
@@ -63,14 +72,14 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
 
     defmt::info!("PLL3 is ready!");
 
-    // Clocking is exact, so brr = 1
-    usart.brr().modify(|_, w| w.brr().set(1));
+    // Clock USART from PLL3
+    rcc.ccipr2().modify(|_, w| w.uart234578sel().pll3_q());
+
+    // Clocking is exact, so brr = 1000 (we want 115.2kbps, not Mbps!)
+    usart.brr().modify(|_, w| w.brr().set(1000));
 
     // We use FIFO mode
     usart.cr1().modify(|_, w| w.fifoen().enabled());
-
-    // Trigger receive interrupt when FIFO is 3/4 full, to leave some margin
-    usart.cr3().modify(|_, w| w.rxftcfg().depth_3_4());
 
     cortex_m::interrupt::free( |cs| {
         COMM_STATE.borrow(cs).replace(MaybeUninit::new(CommState{
@@ -88,31 +97,38 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
             RX_BUFFER = &state.rx_buffer;
         }
         // Enable RX interrupt
-        state.usart.cr3().modify(|_, w| w.rxftie().enabled());
+        // state.usart.cr3().modify(|_, w| w.rxftie().enabled());
+        state.usart.cr1().modify(|_, w| w.rxneie().enabled());
+        unsafe {
+            stm32h7s::NVIC::unmask(Interrupt::USART3);
+        }
 
         // Finally, enable USART, receiver and transmitter
         state.usart.cr1().modify(|_, w| w
-            .ue().enabled()
             .re().enabled()
-            .te().enabled());
+            .te().enabled()
+            .ue().enabled());
+
     });
 
-
+    defmt::info!("USART3 is ready!");
 
     &COMM_STATE
 }
 
 #[inline]
-fn usart3_rxft(rx_buffer: &RXRingBuffer) {
+fn usart3_rx(rx_buffer: &RXRingBuffer) {
     // We use a buffer instead of directly writing to rx_buffer to prevent excessive locking
     // If we are unable to extract all data from RXFIFO, next interrupt will finish the job!
     let mut buffer: Vec<u8, 16> = Vec::new();
     let read = with(&COMM_STATE, |state| {
-        while state.usart.isr().read().rxft().bit_is_set() && buffer.len() <= buffer.capacity() {
+        while state.usart.isr().read().rxfne().bit_is_set() && buffer.len() <= buffer.capacity() {
             let byte = state.usart.rdr().read().rdr().bits();
             buffer.push((byte & 0xFF) as u8).unwrap();
         }
     });
+
+
 
     let num_written = rx_buffer.write(buffer.as_slice());
     if num_written != buffer.len() {
@@ -123,10 +139,10 @@ fn usart3_rxft(rx_buffer: &RXRingBuffer) {
 }
 
 fn try_decode_message(buff: &mut [u8]) -> Option<UplinkMsg> {
-    let result = postcard::from_bytes_cobs(buff);
+    let result = postcard::from_bytes_cobs::<UplinkMsg>(buff);
     match result {
         Ok(msg) => {
-            msg
+            Some(msg)
         },
         Err(err) => {
             None
@@ -145,21 +161,21 @@ pub fn get_message(state: &mut CommState) -> Option<UplinkMsg> {
 
     if state.msg_buffer[state.msg_buffer_ptr - 1] == 0 {
         // Note this does not include the final 0
+        defmt::info!("{}", advance);
+        for byte in state.msg_buffer[0..state.msg_buffer_ptr].iter() {
+            defmt::info!("{:x}", byte);
+        }
         let msg = try_decode_message(&mut state.msg_buffer[0..state.msg_buffer_ptr]);
-        defmt::info!("Received msg of kind {}", msg);
+        defmt::info!("Received msg");
         match msg {
-            Some(_) => { ack(state); },
-            None => { nack(state); }
+            Some(_) => { ack(state); defmt::info!("properly decoded"); },
+            None => { nack(state); defmt::info!("failed decode"); }
         };
+        state.msg_buffer_ptr = 0;
         msg
     } else {
         None
     }
-
-}
-
-#[inline]
-fn usart3_txfe(tx_buffer: &TXRingBuffer) {
 
 }
 
@@ -168,19 +184,12 @@ fn usart3_txfe(tx_buffer: &TXRingBuffer) {
 #[interrupt]
 fn USART3() {
 
-    let rxft = with(&COMM_STATE, |state| {
-        state.usart.isr().read().rxft().bit_is_set()
-    });
-
     let rx_buffer = unsafe {
         // This is safe, as the ring buffers handle "thread safety" and are static, const variables
         // (They do have interior mutability!)
-        &RX_BUFFER.read()
+        &RX_BUFFER.as_ref().unwrap()
     };
 
-    if rxft {
-        usart3_rxft(rx_buffer);
-    }
-
+    usart3_rx(rx_buffer);
     // Note that the interrupt flags are cleared upon emptying of RX FIFO
 }

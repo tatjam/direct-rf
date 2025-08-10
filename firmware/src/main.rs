@@ -5,6 +5,7 @@ mod comm;
 mod sequencer;
 mod util;
 
+use core::hint::black_box;
 use defmt_rtt as _;
 use panic_probe as _;
 use cortex_m_rt::entry;
@@ -90,7 +91,7 @@ fn main() -> ! {
     periph.RCC.ahb4enr().modify(|_, w| w.gpioaen().enabled());
     periph.GPIOA.moder().modify(|_, w| w.mode8().alternate());
 
-    let comm_state = comm::setup(&mut periph.RCC, periph.USART3);
+    let comm_state = comm::setup(&mut periph.RCC, &periph.GPIOD, periph.USART3);
     let sequencer_state = sequencer::setup(periph.RCC, periph.TIM2);
 
     defmt::info!("Sequencer is setup!");
@@ -100,21 +101,23 @@ fn main() -> ! {
             comm::get_message(state)
         });
 
-        match msg {
-            Some(v) => {
-                match v {
-                    UplinkMsg::Ping() => {}
-                    UplinkMsg::PushPLLChange(_) => {}
-                    UplinkMsg::PushFracn(_, _) => {}
-                    UplinkMsg::ClearBuffers() => {}
-                    UplinkMsg::StartNow() => {}
-                    UplinkMsg::StopNow() => {}
-                    UplinkMsg::SetLooping(_) => {}
-                    UplinkMsg::EpochNow(_) => {}
-                    UplinkMsg::StartAtEpoch(_) => {}
-                }
-            },
-            None => {},
+        for i in 0..1000000 {
+            black_box(i);
+        }
+
+        if let Some(v) = msg {
+            match v {
+                UplinkMsg::Ping() => {defmt::info!("Pong :)")}
+                UplinkMsg::PushPLLChange(_) => {}
+                UplinkMsg::PushFracn(_, _) => {}
+                UplinkMsg::ClearBuffers() => {}
+                UplinkMsg::StartNow() => {}
+                UplinkMsg::StopNow() => {}
+                UplinkMsg::SetLooping(_) => {}
+                UplinkMsg::EpochNow(_) => {}
+                UplinkMsg::StartAtEpoch(_) => {}
+            }
+
         }
     }
 }

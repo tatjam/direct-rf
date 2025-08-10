@@ -73,15 +73,12 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
             }
 
             ptrs.read += 1;
-
-            match seek {
-                None => (),
-                Some(v) => if target[*num_read] == v {
-                    break;
-                }
-            }
-
             *num_read += 1;
+
+            if let Some(v) = seek { if v == target[*num_read - 1] {
+                break;
+            }}
+
 
         }
 
@@ -173,7 +170,8 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
         }
 
         cortex_m::interrupt::free(|cs| {
-            self.read_write_ptrs.borrow(cs).set(ptrs);
+            let cell = self.read_write_ptrs.borrow(cs);
+            cell.set(ptrs);
         });
 
         num_written

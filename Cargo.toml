@@ -1,6 +1,7 @@
 [workspace]
 resolver="3"
 members=["common", "firmware", "software"]
+edition = "2024"
 
 # Optimize all sub-crates for size in dev, but not the top crate, so debugging is easy
 [profile.dev.package."*"]
