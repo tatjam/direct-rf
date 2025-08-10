@@ -1,12 +1,10 @@
-use core::cell::{Cell, Ref, RefCell, UnsafeCell};
 use core::mem::MaybeUninit;
-use core::ptr;
-use cortex_m::interrupt::Mutex;
+use core::{ptr};
 use heapless::Vec;
 use stm32h7::{stm32h7s};
 use stm32h7::stm32h7s::interrupt;
-use crate::util;
-use crate::util::{with, InterruptAccessible, RingBuffer, SingleThreadUnsafeCell};
+use crate::util::{with, InterruptAccessible, RingBuffer};
+use common::comm_messages::{DownlinkMsg, UplinkMsg, MAX_UPLINK_MSG_SIZE};
 
 static COMM_STATE: InterruptAccessible<CommState> = InterruptAccessible::new();
 
@@ -17,10 +15,12 @@ type RXRingBuffer = RingBuffer<u8, 512>;
 static mut RX_BUFFER: *const RXRingBuffer = ptr::null();
 static mut TX_BUFFER: *const RXRingBuffer = ptr::null();
 
-struct CommState {
+pub struct CommState {
     usart: stm32h7s::USART3,
     tx_buffer: TXRingBuffer,
     rx_buffer: RXRingBuffer,
+    msg_buffer: [u8; MAX_UPLINK_MSG_SIZE],
+    msg_buffer_ptr: usize,
 }
 
 // Initiates a transfer of bytes, possibly blocking if the tx buffer gets full
@@ -65,25 +65,31 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
     // We use FIFO mode
     usart.cr1().modify(|_, w| w.fifoen().enabled());
 
+    // Trigger receive interrupt when FIFO is 3/4 full, to leave some margin
+    usart.cr3().modify(|_, w| w.rxftcfg().depth_3_4());
+
     cortex_m::interrupt::free( |cs| {
         COMM_STATE.borrow(cs).replace(MaybeUninit::new(CommState{
             usart,
             tx_buffer: RingBuffer::new(),
-            rx_buffer: RingBuffer::new()
+            rx_buffer: RingBuffer::new(),
+            msg_buffer: [0; MAX_UPLINK_MSG_SIZE],
+            msg_buffer_ptr: 0,
         }));
     });
 
-    util::with(&COMM_STATE, |state| {
+    with(&COMM_STATE, |state| {
         unsafe {
             // It's safe to take these pointers as they point to static memory and the RingBuffer
             // handles "thread safety" for us.
             RX_BUFFER = &state.rx_buffer;
             TX_BUFFER = &state.tx_buffer;
         }
-        // Finally, enable USART, receiver and transmitter, and receiver interrupt
-        // Transmitter interrupt is enabled as needed
+        // Enable RX interrupt
+        state.usart.cr3().modify(|_, w| w.rxftie().enabled());
+
+        // Finally, enable USART, receiver and transmitter
         state.usart.cr1().modify(|_, w| w
-            .rxffie().enabled()
             .ue().enabled()
             .re().enabled()
             .te().enabled());
@@ -95,7 +101,54 @@ pub fn setup(rcc: &mut stm32h7s::RCC, usart: stm32h7s::USART3)
 }
 
 #[inline]
-fn usart3_rxff(rx_buffer: &RXRingBuffer) {
+fn usart3_rxft(rx_buffer: &RXRingBuffer) {
+    // We use a buffer instead of directly writing to rx_buffer to prevent excessive locking
+    // If we are unable to extract all data from RXFIFO, next interrupt will finish the job!
+    let mut buffer: Vec<u8, 16> = Vec::new();
+    let read = with(&COMM_STATE, |state| {
+        while state.usart.isr().read().rxft().bit_is_set() && buffer.len() <= buffer.capacity() {
+            let byte = state.usart.rdr().read().rdr().bits();
+            buffer.push((byte & 0xFF) as u8).unwrap();
+        }
+    });
+
+    let num_written = rx_buffer.write(buffer.as_slice());
+    if num_written != buffer.len() {
+        // This would mean losing data, the programmer must increase the buffer size
+        panic!("RX buffer is full to writes");
+    }
+
+}
+
+fn try_decode_message(buff: &mut [u8]) -> Option<UplinkMsg> {
+    let result = postcard::from_bytes_cobs(buff);
+    match result {
+        Ok(msg) => {
+            // Send Ack
+            msg
+        },
+        Err(err) => {
+            // Send Unack, this will likely trigger a resend of the message
+            None
+        }
+    }
+}
+
+// If a full message is available in the receive ring buffer, it's returned
+pub fn get_message(state: &mut CommState) -> Option<UplinkMsg> {
+    let advance = state.rx_buffer.read(&mut state.msg_buffer[state.msg_buffer_ptr..], Some(0));
+    state.msg_buffer_ptr += advance;
+
+    if state.msg_buffer_ptr == 0 {
+        return None
+    }
+
+    if state.msg_buffer[state.msg_buffer_ptr - 1] == 0 {
+        // Note this does not include the final 0
+        try_decode_message(&mut state.msg_buffer[0..state.msg_buffer_ptr])
+    } else {
+        None
+    }
 
 }
 
@@ -111,12 +164,12 @@ fn USART3() {
 
     // rxff = RX FIFO Full
     // txfe = TX FIFO Empty
-    let (rxff, txfe) = util::with(&COMM_STATE, |state| {(
-        state.usart.isr().read().rxff().bit_is_set(),
+    let (rxft, txfe) = with(&COMM_STATE, |state| {(
+        state.usart.isr().read().rxft().bit_is_set(),
         state.usart.isr().read().txfe().bit_is_set()
     )});
 
-    assert!(rxff || txfe);
+    assert!(rxft || txfe);
 
     let (rx_buffer, tx_buffer) = unsafe {(
         // This is safe, as the ring buffers handle "thread safety" and are static, const variables
@@ -125,8 +178,8 @@ fn USART3() {
         &TX_BUFFER.read()
     )};
 
-    if rxff {
-        usart3_rxff(rx_buffer);
+    if rxft {
+        usart3_rxft(rx_buffer);
     }
 
     if txfe {

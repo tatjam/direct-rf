@@ -2,9 +2,7 @@
     The sequencer uses TIM to drive the PLL at desired frequencies automatically, without any
     significant software effects on timing.
  */
-use core::cell::{RefCell};
 use core::mem::MaybeUninit;
-use cortex_m::interrupt::Mutex;
 use stm32h7::{stm32h7s};
 use heapless::Vec;
 use stm32h7::stm32h7s::{interrupt, Interrupt};

@@ -1,11 +1,10 @@
-use core::ops::Deref;
-use heapless::Vec;
 use serde::{Serialize, Deserialize};
 use crate::sequence::PLLChange;
 
+pub const MAX_UPLINK_MSG_SIZE: usize = 256;
+
 // We use COBS to "encode" the messages. Each message is simply encoded by postcard in COBS
-// mode, and a zero is sent before and after each message (yes, duplicated zeroes are sent
-// but this allows the receiver to connect "in the fly", which could save us a headache)
+// mode, and a zero is sent after each message.
 
 #[derive(Serialize, Deserialize)]
 pub enum UplinkMsg {
@@ -22,5 +21,6 @@ pub enum UplinkMsg {
 
 #[derive(Serialize, Deserialize)]
 pub enum DownlinkMsg {
-    Pong(),
+    Ack(),
+    Unack(),
 }

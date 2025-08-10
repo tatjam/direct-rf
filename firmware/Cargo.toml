@@ -4,9 +4,6 @@ name = "firmware"
 version = "0.1.0"
 edition = "2024"
 
-[profile.release]
-opt-level = 'z' # turn on maximum optimizations. We only have 64kB
-lto = true      # Link-time-optimizations for further size reduction
 
 [dependencies]
 cortex-m-rt = "0.7.5"

@@ -10,7 +10,7 @@ use panic_probe as _;
 use cortex_m_rt::entry;
 use defmt::export::panic;
 use stm32h7::{stm32h7s};
-use common::sequence::PLLChange;
+use common::comm_messages::{DownlinkMsg, UplinkMsg};
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
@@ -81,7 +81,6 @@ fn setup_gpio(rcc: &mut stm32h7s::RCC, gpioc: &mut stm32h7s::GPIOC) {
 #[entry]
 fn main() -> ! {
     let mut periph = stm32h7s::Peripherals::take().unwrap();
-    let mut core_periph = cortex_m::Peripherals::take().unwrap();
     defmt::info!("Hello directrf!");
 
 
@@ -91,34 +90,31 @@ fn main() -> ! {
     periph.RCC.ahb4enr().modify(|_, w| w.gpioaen().enabled());
     periph.GPIOA.moder().modify(|_, w| w.mode8().alternate());
 
+    let comm_state = comm::setup(&mut periph.RCC, periph.USART3);
     let sequencer_state = sequencer::setup(periph.RCC, periph.TIM2);
 
     defmt::info!("Sequencer is setup!");
 
-    util::with(sequencer_state, |state| {
-        let change = PLLChange {
-            for_ticks: 9,
-            start_tick: 0,
-            divn: 20 - 1,
-            vcosel: true,
-            divp: 30-1,
-            tim_us: 100000,
-        };
-
-        state.pllchange_buffer.push(change);
-        state.fracn_buffer.push(0);
-        state.fracn_buffer.push(1024);
-        state.fracn_buffer.push(2048);
-        state.fracn_buffer.push(3072);
-        state.fracn_buffer.push(4096);
-        state.fracn_buffer.push(5120);
-        state.fracn_buffer.push(6144);
-        state.fracn_buffer.push(7168);
-        state.fracn_buffer.push(8191);
-
-        sequencer::launch(state);
-    });
-
     loop {
+        let msg = util::with(comm_state, |state| {
+            comm::get_message(state)
+        });
+
+        match msg {
+            Some(v) => {
+                match v {
+                    UplinkMsg::Ping() => {}
+                    UplinkMsg::PushPLLChange(_) => {}
+                    UplinkMsg::PushFracn(_, _) => {}
+                    UplinkMsg::ClearBuffers() => {}
+                    UplinkMsg::StartNow() => {}
+                    UplinkMsg::StopNow() => {}
+                    UplinkMsg::SetLooping(_) => {}
+                    UplinkMsg::EpochNow(_) => {}
+                    UplinkMsg::StartAtEpoch(_) => {}
+                }
+            },
+            None => {},
+        }
     }
 }

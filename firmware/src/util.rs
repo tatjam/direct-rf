@@ -2,7 +2,6 @@ use core::cell::{Cell, RefCell};
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 use cortex_m::interrupt::Mutex;
-use heapless::Vec;
 
 // Because we are in a single-threaded environment, this is safe
 pub struct SingleThreadUnsafeCell<T>(pub core::cell::UnsafeCell<T>);
@@ -42,12 +41,12 @@ struct RingBufferPtrs {
     write: usize,
 }
 
-pub struct RingBuffer<T: Default + Copy, const Len: usize> {
-    data: SingleThreadUnsafeCell<[T; Len]>,
+pub struct RingBuffer<T: Default + Copy + Eq, const L: usize> {
+    data: SingleThreadUnsafeCell<[T; L]>,
     read_write_ptrs: Mutex<Cell<RingBufferPtrs>>,
 }
 
-impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
+impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
     // Reads from buffer to target, up to index "up_to", but not including that byte,
     // starting at ptrs.read, which is included
     fn read_up_to(
@@ -56,15 +55,16 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
         up_to: usize,
         ptrs: &mut RingBufferPtrs,
         num_read: &mut usize,
+        seek: Option<T>
     ) -> bool {
         assert!(ptrs.read <= up_to);
-        assert!(ptrs.read <= Len);
-        assert!(up_to <= Len);
+        assert!(ptrs.read <= L);
+        assert!(up_to <= L);
 
         while ptrs.read < up_to {
             if *num_read >= target.len() {
                 // We ran out of space in target
-                return false;
+                break;
             }
             unsafe {
                 // SAFETY: This is safe, because no reading may take place to the right of write buffer,
@@ -72,16 +72,27 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
                 target[*num_read] = (*self.data.0.get())[ptrs.read];
             }
 
+            ptrs.read += 1;
+
+            match seek {
+                None => (),
+                Some(v) => if target[*num_read] == v {
+                    break;
+                }
+            }
+
             *num_read += 1;
-            ptrs.read += 1
+
         }
 
-        true
+        ptrs.read == up_to - 1
     }
 
     // Blocking writing very briefly, reads as much data as possible into destination slice
     // Returns number of elements read
-    pub fn read(self: &Self, target: &mut [T]) -> usize {
+    // If seek is given, the system will only read up to the given value, including it in the
+    // bytes read
+    pub fn read(self: &Self, target: &mut [T], seek: Option<T>) -> usize {
         let mut ptrs = cortex_m::interrupt::free(|cs| self.read_write_ptrs.borrow(cs).get());
 
         let mut num_read = 0;
@@ -93,14 +104,14 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
 
         if ptrs.write < ptrs.read {
             // We need to read to end of buffer, and then up to write ptr
-            if self.read_up_to(target, Len, &mut ptrs, &mut num_read) {
+            if self.read_up_to(target, L, &mut ptrs, &mut num_read, seek) {
                 // We wrapped around
                 ptrs.read = 0;
-                self.read_up_to(target, ptrs.write, &mut ptrs, &mut num_read);
+                self.read_up_to(target, ptrs.write, &mut ptrs, &mut num_read, seek);
             }
         } else {
             // We need to read up to write ptr
-            self.read_up_to(target, ptrs.write, &mut ptrs, &mut num_read);
+            self.read_up_to(target, ptrs.write, &mut ptrs, &mut num_read, seek);
         }
 
         cortex_m::interrupt::free(|cs| {
@@ -121,8 +132,8 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
         num_written: &mut usize,
     ) -> bool {
         assert!(ptrs.write <= up_to);
-        assert!(ptrs.write <= Len);
-        assert!(up_to <= Len);
+        assert!(ptrs.write <= L);
+        assert!(up_to <= L);
 
         while ptrs.write < up_to {
             if *num_written >= data.len() {
@@ -154,7 +165,7 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
             self.write_up_to(data, ptrs.read, &mut ptrs, &mut num_written);
         } else {
             // We need to write up to end of buffer, and then up to read ptr
-            if self.write_up_to(data, Len, &mut ptrs, &mut num_written) {
+            if self.write_up_to(data, L, &mut ptrs, &mut num_written) {
                 // We wrapped around
                 ptrs.write = 0;
                 self.write_up_to(data, ptrs.read, &mut ptrs, &mut num_written);
@@ -170,7 +181,7 @@ impl<T: Default + Copy, const Len: usize> RingBuffer<T, Len> {
 
     pub fn new() -> Self {
         Self {
-            data: SingleThreadUnsafeCell{0: core::cell::UnsafeCell::new([T::default(); Len])},
+            data: SingleThreadUnsafeCell{0: core::cell::UnsafeCell::new([T::default(); L])},
             read_write_ptrs: Mutex::new(Cell::new(RingBufferPtrs {
                 read: 0,
                 write: 0,

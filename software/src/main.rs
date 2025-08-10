@@ -1,6 +1,5 @@
 use std::fmt::Write;
-use std::{env, fs};
-use std::time::{Instant};
+use std::{fs};
 use serialport::{SerialPort, SerialPortType};
 use regex::Regex;
 use common::sequence::{PLLChange, Sequence};
@@ -27,7 +26,7 @@ fn find_port() -> Result<String, &'static str> {
         match port.port_type {
             SerialPortType::UsbPort(info) => {
 
-                return Result::Ok(port.port_name);
+                return Ok(port.port_name);
             }
             _ => {
                 continue;
@@ -35,7 +34,7 @@ fn find_port() -> Result<String, &'static str> {
         }
     }
 
-    Result::Err("ST-Link VCOM port not found")
+    Err("ST-Link VCOM port not found")
 }
 
 // The sequencer will generate a pseudo-random sequence that spends t_us
@@ -43,22 +42,22 @@ fn find_port() -> Result<String, &'static str> {
 // changes.
 struct FrequencyOrder {
     t_us: u32,
-    freq_Hz: u32,
-    bandwidth_Hz: u32,
+    freq_hz: u32,
+    bandwidth_hz: u32,
     n: usize,
 }
 
 fn parse_orders(file: String) -> Result<Vec<FrequencyOrder>, &'static str> {
     let r = Regex::new(r"(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)").unwrap();
     let mut out: Vec<FrequencyOrder> = Vec::new();
-    let mut lines = file.lines();
+    let lines = file.lines();
 
     for line in lines {
         let captures = r.captures(line).unwrap();
         out.push(FrequencyOrder {
             t_us: captures.get(1).unwrap().as_str().parse().unwrap(),
-            freq_Hz: captures.get(2).unwrap().as_str().parse().unwrap(),
-            bandwidth_Hz: captures.get(3).unwrap().as_str().parse().unwrap(),
+            freq_hz: captures.get(2).unwrap().as_str().parse().unwrap(),
+            bandwidth_hz: captures.get(3).unwrap().as_str().parse().unwrap(),
             n: captures.get(4).unwrap().as_str().parse().unwrap()
         })
     }
@@ -80,8 +79,8 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
 
     // Divn and divp are set to maximize the resolution. It turns out
     // the following (found by Mathematica) settings work:
-    let fhigh = order.freq_Hz as f64 + 0.5 * order.bandwidth_Hz as f64;
-    let flow = order.freq_Hz as f64 - 0.5 * order.bandwidth_Hz as f64;
+    let fhigh = order.freq_hz as f64 + 0.5 * order.bandwidth_hz as f64;
+    let flow = order.freq_hz as f64 - 0.5 * order.bandwidth_hz as f64;
     if fhigh <= flow || flow <= 0.0 {
        return Err("Invalid configuration");
     }
@@ -121,7 +120,7 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
         // fac is uniformly distributed on [-0.5, 0.5), and represents
         // our desired position in the bandwidth
         let fac = rng.random::<f64>() - 0.5;
-        let freq = order.freq_Hz as f64 + fac * (order.bandwidth_Hz as f64);
+        let freq = order.freq_hz as f64 + fac * (order.bandwidth_hz as f64);
         // Actual fout = fref * (divn + 1 + fracn/2^13) / divp, so we find
         let fracnf = 8192.0 * (divpf * freq - FREF_HZ - divnf * FREF_HZ) / FREF_HZ;
         let fracn = if fracnf < 0.0 {
@@ -157,10 +156,10 @@ fn build_sequence(orders: Vec<FrequencyOrder>, seed: u64) -> Result<Sequence, &'
     };
 
     for order in orders {
-        let mut subseq = build_subsequence(order, seed).unwrap();
+        let mut subseq = build_subsequence(order, seed)?;
         // Offset PLLChange index!
         subseq.change.start_tick += out.fracn_buffer.len();
-        out.pllchange_buffer.push(subseq.change);
+        out.pllchange_buffer.push(subseq.change).unwrap_or_else(|_| panic!());
         for fracni in subseq.fracn {
             out.fracn_buffer.push(fracni).unwrap();
         }
