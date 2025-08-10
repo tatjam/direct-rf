@@ -10,7 +10,7 @@ use rand_chacha::ChaCha20Rng;
 use pico_args;
 use chrono;
 use common::comm_messages::{UplinkMsg, MAX_UPLINK_MSG_SIZE};
-use common::comm_messages::UplinkMsg::Ping;
+use common::comm_messages::UplinkMsg::{ClearBuffers, Ping, PushFracn, PushPLLChange, StartNow, StopNow};
 // Pseudorandom sequence (PRSeq) generation:
 // A file is used to read the "order frequencies" (used to fine-tune the system),
 // which specifies a series of intervals in time and frequency where a
@@ -142,7 +142,7 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
             divn,
             vcosel,
             divp,
-            tim_us: (order.n * order.t_us as usize) as u32,
+            tim_us: ((order.t_us as f64 / order.n as f64) as usize) as u32,
         },
 
         fracn: fracn_buf,
@@ -215,8 +215,24 @@ fn frequencies_to_str(freqs: &Vec<(f64, f64)>) -> String {
     out
 }
 
+fn send_seq(port: &mut Box<dyn SerialPort>, seq: Sequence) -> Result<(), &'static str> {
+    for slice in seq.fracn_buffer.chunks(32) {
+        let mut fixedslice: [u16; 32] = [0; 32];
+        // The rest of elements may be left zeroed, as we pass the len separately
+        fixedslice[..slice.len()].copy_from_slice(slice);
+        let mut cmd = PushFracn(slice.len() as u8, fixedslice);
+        send(port, &cmd).unwrap();
+    }
+
+    for pll in seq.pllchange_buffer {
+        send(port, &PushPLLChange(pll)).unwrap();
+    }
+
+    Ok(())
+}
+
 // Tries to send data, waiting for acknowledge and retrying
-fn send(mut port: Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static str> {
+fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static str> {
     let mut databuf: [u8; MAX_UPLINK_MSG_SIZE] = [0; MAX_UPLINK_MSG_SIZE];
     let try_encoded = postcard::to_slice_cobs(msg, &mut databuf);
     let data = if try_encoded.is_err() {
@@ -304,7 +320,7 @@ fn main() {
 
     if !dry {
         let port_name = find_port().unwrap();
-        let port = serialport::new(port_name, 115_200)
+        let mut port = serialport::new(port_name, 115_200)
             .timeout(Duration::from_secs_f64(0.5))
             .flow_control(FlowControl::None)
             .parity(Parity::None)
@@ -313,7 +329,10 @@ fn main() {
             .open().expect("Failed to open STM32 port");
 
         // Send the sequence
-        send(port, &Ping()).unwrap();
+        send(&mut port, &StopNow());
+        send(&mut port, &ClearBuffers());
+        send_seq(&mut port, seq);
+        send(&mut port, &StartNow());
 
     }
 

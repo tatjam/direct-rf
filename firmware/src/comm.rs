@@ -161,15 +161,10 @@ pub fn get_message(state: &mut CommState) -> Option<UplinkMsg> {
 
     if state.msg_buffer[state.msg_buffer_ptr - 1] == 0 {
         // Note this does not include the final 0
-        defmt::info!("{}", advance);
-        for byte in state.msg_buffer[0..state.msg_buffer_ptr].iter() {
-            defmt::info!("{:x}", byte);
-        }
         let msg = try_decode_message(&mut state.msg_buffer[0..state.msg_buffer_ptr]);
-        defmt::info!("Received msg");
         match msg {
-            Some(_) => { ack(state); defmt::info!("properly decoded"); },
-            None => { nack(state); defmt::info!("failed decode"); }
+            Some(_) => { ack(state); },
+            None => { nack(state); defmt::warn!("failed decode"); }
         };
         state.msg_buffer_ptr = 0;
         msg

@@ -11,7 +11,10 @@ use panic_probe as _;
 use cortex_m_rt::entry;
 use defmt::export::panic;
 use stm32h7::{stm32h7s};
+use stm32h7::stm32h7s::Interrupt;
 use common::comm_messages::{UplinkMsg};
+use crate::sequencer::{SequencerState};
+use crate::util::InterruptAccessible;
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
@@ -76,6 +79,46 @@ fn setup_gpio(rcc: &mut stm32h7s::RCC, gpioc: &mut stm32h7s::GPIOC) {
     // gpioc.ospeedr().modify(|_, w| w.ospeed9().very_high_speed());
 }
 
+fn handle_msg(msg: UplinkMsg, sequencer_state: &InterruptAccessible<SequencerState>) {
+    match msg {
+        UplinkMsg::Ping() => {defmt::info!("Pong :)")}
+        UplinkMsg::PushPLLChange(ch) => {
+            util::with(sequencer_state, |state| {
+                defmt::info!("Pushing PLLChange");
+                sequencer::push_pllchange(state, ch);
+            });
+        },
+        UplinkMsg::PushFracn(num, arr) => {
+            util::with(sequencer_state, |state| {
+                defmt::info!("Pushing fracn");
+                sequencer::push_fracn(state, &arr[0..(num as usize)]);
+                defmt::info!("Done :)");
+            });
+        },
+        UplinkMsg::ClearBuffers() => {
+            util::with(sequencer_state, |state| {
+                defmt::info!("Cleaning buffers");
+                sequencer::clear_buffers(state);
+            });
+        },
+        UplinkMsg::StartNow() => {
+            util::with(sequencer_state, |state| {
+                defmt::info!("Launching");
+                sequencer::launch(state);
+            });
+        },
+        UplinkMsg::StopNow() => {
+            util::with(sequencer_state, |state| {
+                defmt::info!("Stopping");
+                sequencer::stop(state);
+            });
+        },
+        UplinkMsg::SetLooping(_) => {},
+        UplinkMsg::EpochNow(_) => {},
+        UplinkMsg::StartAtEpoch(_) => {},
+    }
+}
+
 // This marks the entrypoint of our application. The cortex_m_rt creates some
 // startup code before this, but we don't need to worry about this. otably, it
 // enables the FPU
@@ -101,23 +144,13 @@ fn main() -> ! {
             comm::get_message(state)
         });
 
-        for i in 0..1000000 {
-            black_box(i);
-        }
-
         if let Some(v) = msg {
-            match v {
-                UplinkMsg::Ping() => {defmt::info!("Pong :)")}
-                UplinkMsg::PushPLLChange(_) => {}
-                UplinkMsg::PushFracn(_, _) => {}
-                UplinkMsg::ClearBuffers() => {}
-                UplinkMsg::StartNow() => {}
-                UplinkMsg::StopNow() => {}
-                UplinkMsg::SetLooping(_) => {}
-                UplinkMsg::EpochNow(_) => {}
-                UplinkMsg::StartAtEpoch(_) => {}
+            handle_msg(v, sequencer_state);
+        } else {
+            for i in 0..1000000 {
+                black_box(i);
             }
-
         }
+
     }
 }

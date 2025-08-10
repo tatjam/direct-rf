@@ -1,7 +1,7 @@
 use heapless::Vec;
 use serde::{Deserialize, Serialize};
 
-pub const MAX_SEQUENCE_LEN: usize = 512;
+pub const MAX_SEQUENCE_LEN: usize = 1024;
 pub const MAX_DIVN_CHANGES: usize = 32;
 
 #[derive(Serialize, Deserialize)]

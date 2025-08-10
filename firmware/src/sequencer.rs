@@ -6,7 +6,7 @@ use core::mem::MaybeUninit;
 use stm32h7::{stm32h7s};
 use heapless::Vec;
 use stm32h7::stm32h7s::{interrupt, Interrupt};
-use common::sequence::Sequence;
+use common::sequence::{PLLChange, Sequence};
 use crate::util;
 use crate::util::InterruptAccessible;
 
@@ -136,11 +136,32 @@ pub fn launch(state: &mut SequencerState) {
 
 }
 
-pub fn stop(state: &mut SequencerState) {
-    if !state.is_running {
-        return;
-    }
 
+pub fn clear_buffers(state: &mut SequencerState) {
+    stop(state);
+    state.seq.fracn_buffer.clear();
+    state.seq.pllchange_buffer.clear();
+}
+
+pub fn stop(state: &mut SequencerState) {
+    state.is_running = false;
+
+    // Disable timer auto-rearm and let it finish
+    state.tim.cr1().modify(|_, w| w.opm().enabled());
+
+    state.tim.cr1().modify(|_, w| w.cen().disabled());
+    state.tim.cr1().modify(|_, w| w.opm().disabled());
+}
+
+pub fn push_fracn(state: &mut SequencerState, fracn: &[u16]) {
+    defmt::info!("{}", state.seq.fracn_buffer.len());
+    for fracnv in fracn {
+        state.seq.fracn_buffer.push(*fracnv).unwrap();
+    }
+}
+
+pub fn push_pllchange(state: &mut SequencerState, change: PLLChange) {
+    state.seq.pllchange_buffer.push(change).unwrap_or_else(|_| panic!() );
 }
 
 pub fn setup(rcc: stm32h7s::RCC, tim: stm32h7s::TIM2)
@@ -192,6 +213,10 @@ fn TIM2() {
     util::with(&SEQUENCER_STATE, |state| {
         if state.tim.sr().read().uif().bit_is_set() {
             state.tim.sr().modify(|_, w| w.uif().clear_bit());
+
+            if !state.is_running {
+                return;
+            }
 
             if state.fracn_rem == 0 {
                 step(state);
