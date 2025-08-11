@@ -120,6 +120,7 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
         return Err("No DIVP configuration satisfies desired frequency range");
     }
 
+    let mut t = 0.0;
     for i in 0..order.n {
         // fac is uniformly distributed on [-0.5, 0.5), and represents
         // our desired position in the bandwidth
