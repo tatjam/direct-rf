@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::{fs};
+use std::cmp::min;
 use std::io::{ErrorKind, Read};
 use std::time::{Duration, Instant};
 use serialport::{ClearBuffer, DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits};
@@ -104,6 +105,9 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
     } else if min_vcofreq_0 >= VCOSEL0_MIN_FREQ && max_vcofreq_0 <= VCOSEL0_MAX_FREQ {
         false
     } else {
+        println!("divnf = {} divpf = {}", divnf, divpf);
+        println!("min_vcofreq_0 = {} max_vcofreq_0 = {}", min_vcofreq_0, max_vcofreq_0);
+        println!("min_vcofreq_1 = {} max_vcofreq_1 = {}", min_vcofreq_1, max_vcofreq_1);
         return Err("No VCO configuration satisfies desired frequency range");
     };
 
