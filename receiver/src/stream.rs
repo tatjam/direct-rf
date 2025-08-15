@@ -13,6 +13,7 @@ use wave_stream::open_wav::OpenWav;
 use wave_stream::wave_reader::{OpenWavReader, StreamOpenWavReader, StreamWavReader};
 
 pub type Scalar = f32;
+pub type Sample = Complex<Scalar>;
 
 // Allows streaming samples from a Wav file, without fully loading them in memory
 pub struct StreamedBaseband {
@@ -68,7 +69,7 @@ impl StreamedBaseband {
     }
 
     // If we run out of data, the vector will not have the same size as num_samples
-    pub fn get_next(self: &mut Self, num_samples: u64) -> Vec<Complex<Scalar>> {
+    pub fn get_next(self: &mut Self, num_samples: usize) -> Vec<Sample> {
         let mut out = Vec::new();
 
         for i in 0..num_samples {
@@ -124,7 +125,7 @@ impl StreamedSamplesFreqs {
     }
 
     // If we run out of data, the vector will not have the same size as num_samples
-    pub fn get_next(self: &mut Self, num_samples: u64) -> Vec<Complex<Scalar>> {
+    pub fn get_next(self: &mut Self, num_samples: usize) -> Vec<Sample> {
         let mut out = Vec::new();
         let mut num_written = 0;
 
