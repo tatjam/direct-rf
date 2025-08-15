@@ -74,8 +74,12 @@ impl Dsp {
 
         if offset > 0 {
             // We need to delay reference, i.e. advance baseband (dropping samples)
+            let new_samples = self.baseband.get_next(offset.abs() as usize);
+            rotate_insert(&mut baseband, &new_samples);
         } else if offset < 0 {
             // We need to delay baseband, i.e. advance reference (dropping samples)
+            let new_samples = self.freqs.get_next(offset.abs() as usize);
+            rotate_insert(&mut reference, &new_samples);
         }
 
         debug_assert_eq!(baseband.len(), reference.len());
@@ -115,4 +119,15 @@ fn zeropad_shortest(a: &mut Vec<Sample>, b: &mut Vec<Sample>, min_size: usize) {
 // Offset is positive if b must be delayed to match a
 fn correlate(a: &[Sample], b: &[Sample]) -> (i32, Scalar) {
     (0, 0.0)
+}
+
+// Inserts inserted samples at the end, shifting all the other samples to the left, and
+// discarding everything that runs off the array
+fn rotate_insert(vec: &mut [Sample], inserted: &[Sample]) {
+    debug_assert!(vec.len() > inserted.len());
+    vec.rotate_left(inserted.len());
+    // Overwrite
+    for i in 0..inserted.len() {
+        vec[vec.len() - 1 - i] = inserted[inserted.len() - 1 - i];
+    }
 }
