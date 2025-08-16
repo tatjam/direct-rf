@@ -4,14 +4,17 @@
 use std::fs::File;
 use std::hint::unreachable_unchecked;
 use std::io::{BufRead, BufReader};
-use std::ops::Sub;
 use std::path::Path;
 use log::{info, warn};
 use regex::Regex;
-use chrono::{TimeZone, Utc, DateTime, TimeDelta};
+use chrono::{TimeZone, Utc, DateTime};
 use rustfft::num_complex::Complex;
 use wave_stream::open_wav::OpenWav;
-use wave_stream::wave_reader::{OpenWavReader, StreamOpenWavReader, StreamWavReader};
+use wave_stream::samples_by_channel::SamplesByChannel;
+use wave_stream::wave_header::{Channels, SampleFormat, WavHeader};
+use wave_stream::wave_reader::{StreamOpenWavReader};
+use wave_stream::wave_writer::OpenWavWriter;
+use wave_stream::write_wav_to_file_path;
 
 pub type Scalar = f32;
 pub type Sample = Complex<Scalar>;
@@ -73,12 +76,12 @@ impl StreamedBaseband {
     pub fn get_next(self: &mut Self, num_samples: usize) -> Vec<Sample> {
         let mut out = Vec::new();
 
-        for i in 0..num_samples {
+        for _ in 0..num_samples {
             let samps = match self.wav.next() {
                 None => break,
-                Some(v) => match(v) {
+                Some(v) => match v {
                     Ok(samp) => {samp}
-                    Err(e) => break,
+                    Err(_) => break,
                 }
             };
             // SAFETY: Safe because we checked on object creation, we need this to run fast
@@ -106,9 +109,11 @@ impl StreamedBaseband {
         let num_samples = (delta * (self.sample_rate as f64)).floor() as usize;
         info!("Seeking baseband {} samples to align with epoch {}", num_samples, epoch);
 
-        for i in 0..num_samples {
+        for _ in 0..num_samples {
             _ =self.wav.next();
         }
+
+        info!("Done");
     }
 
     pub fn get_sample_rate(self: &Self) -> u32 {
@@ -130,6 +135,7 @@ struct FreqChange {
 // Allows streaming samples from a frequencies file, without fully loading them in memory
 pub struct StreamedSamplesFreqs {
     t: f64,
+    phase: f64,
     tstep: f64,
     freqs: Vec<FreqChange>,
     center_freq: f64,
@@ -139,7 +145,7 @@ impl StreamedSamplesFreqs {
 
     // Returns current, and next freq change for given time
     fn find_freq_change_for(self: &Self, t: f64) -> Option<(FreqChange, FreqChange)> {
-        match self.freqs.windows(2).find(|pair| pair[0].t >= t && pair[1].t > t) {
+        match self.freqs.windows(2).find(|pair| pair[0].t <= t && pair[1].t > t) {
             None => None,
             Some(v) => Some((v[0], v[1])),
         }
@@ -153,19 +159,29 @@ impl StreamedSamplesFreqs {
         while let Some(pair) = self.find_freq_change_for(self.t) {
             let t_remains = pair.1.t - self.t;
             let samps_remain = (t_remains / self.tstep).ceil() as u64;
+            let mut this_step_written: usize = 0;
 
             for _ in 0..samps_remain {
                 debug_assert!(num_written <= num_samples);
                 if num_written == num_samples {
-                    return out;
+                    break;
                 }
 
                 let rf = pair.0.freq - self.center_freq;
                 let w = 2.0 * std::f64::consts::PI * rf;
-                out.push(Complex::new(w.sin() as Scalar, w.cos() as Scalar));
+                self.phase += w * self.tstep;
+                out.push(Complex::new(self.phase.sin() as Scalar, self.phase.cos() as Scalar));
 
                 num_written += 1;
-                self.t += self.tstep;
+                this_step_written += 1;
+                // DO not do timestepping here, as floating point precision error accumulates
+            }
+
+            // Do it here instead
+            self.t += self.tstep * this_step_written as f64;
+
+            if num_written == num_samples {
+                break;
             }
         }
 
@@ -199,10 +215,36 @@ impl StreamedSamplesFreqs {
             center_freq,
             tstep: 1.0 / (srate as f64),
             freqs,
+            phase: 0.0,
         }
     }
 
     pub fn get_first_epoch(self: &Self) -> f64 {
         return self.freqs[0].t;
+    }
+
+    pub fn dump_to_wav(self: &mut Self, path: String) {
+        let header = WavHeader {
+            sample_format: SampleFormat::Float,
+            channels: Channels::new().front_left().front_right(),
+            sample_rate: (1.0 / self.tstep) as u32,
+        };
+        let open_wav = write_wav_to_file_path(Path::new(&path), header).unwrap();
+        let mut writer = open_wav.get_random_access_f32_writer().unwrap();
+        let mut i = 0;
+        loop {
+            let samples = self.get_next(10000);
+            if samples.len() == 0 {
+                break;
+            }
+
+            for sample in samples {
+                let mut sample_per_channel = SamplesByChannel::new();
+                sample_per_channel.front_left = Some(sample.re * 0.1);
+                sample_per_channel.front_right = Some(sample.im * 0.1);
+                writer.write_samples(i, sample_per_channel);
+                i += 1;
+            }
+        }
     }
 }

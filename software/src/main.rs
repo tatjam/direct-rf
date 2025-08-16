@@ -10,6 +10,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use pico_args;
 use chrono;
+use chrono::{DateTime, Utc};
 use common::comm_messages::{UplinkMsg, MAX_UPLINK_MSG_SIZE};
 use common::comm_messages::UplinkMsg::{ClearBuffers, Ping, PushFracn, PushPLLChange, StartNow, StopNow};
 // Pseudorandom sequence (PRSeq) generation:
@@ -21,7 +22,7 @@ use common::comm_messages::UplinkMsg::{ClearBuffers, Ping, PushFracn, PushPLLCha
 // TIME_SEED_ROUND_S seconds that's before the start of the sequence. This rounding
 // reduces dependency on very precise clock.
 
-const TIME_SEED_ROUND_S: i64 = 10;
+const TIME_SEED_ROUND_S: i64 = 60;
 const FREF_HZ: f64 = 12_000_000.0;
 
 fn find_port() -> Result<String, &'static str> {
@@ -337,7 +338,15 @@ fn main() {
         send(&mut port, &StopNow());
         send(&mut port, &ClearBuffers());
         send_seq(&mut port, seq);
+
+        println!("Waiting to start sequence");
+        // Trigger the start at a relatively precise time
+        while Utc::now().timestamp() < start_epoch {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
         send(&mut port, &StartNow());
+        println!("Sequence started");
 
     }
 
