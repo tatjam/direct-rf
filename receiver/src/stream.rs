@@ -242,7 +242,7 @@ impl StreamedSamplesFreqs {
                 let mut sample_per_channel = SamplesByChannel::new();
                 sample_per_channel.front_left = Some(sample.re * 0.1);
                 sample_per_channel.front_right = Some(sample.im * 0.1);
-                writer.write_samples(i, sample_per_channel);
+                let _ = writer.write_samples(i, sample_per_channel);
                 i += 1;
             }
         }

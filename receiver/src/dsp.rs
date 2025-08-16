@@ -33,6 +33,8 @@ pub struct Dsp {
     correlate_ifft: Arc<dyn Fft<Scalar>>,
     adjust_scratch: Vec<Sample>,
     correlate_scratch: Vec<Sample>,
+    abuf: Vec<Sample>,
+    bbuf: Vec<Sample>,
 
     first_run: bool,
 }
@@ -54,8 +56,10 @@ impl Dsp {
                 &self.adjust_fft,
                 &self.adjust_ifft,
                 &mut self.adjust_scratch,
-                &mut baseband[0..self.settings.adjust_samps],
-                &mut reference[0..self.settings.adjust_samps],
+                &baseband[0..self.settings.adjust_samps],
+                &reference[0..self.settings.adjust_samps],
+                &mut self.abuf[0..(self.settings.adjust_samps * 2 - 1)],
+                &mut self.bbuf[0..(self.settings.adjust_samps * 2- 1)],
             );
 
             if adjust_res.1 >= self.settings.min_psr {
@@ -69,6 +73,8 @@ impl Dsp {
             &mut self.correlate_scratch,
             &mut baseband[0..self.settings.correlate_samps],
             &mut reference[0..self.settings.correlate_samps],
+            &mut self.abuf,
+            &mut self.bbuf
         )
     }
 
@@ -80,9 +86,9 @@ impl Dsp {
     // Decimate down to the output sample rate
     pub fn run_once(self: &mut Self) -> Vec<Sample> {
         if self.first_run {
-            // Advance baseband so it's one second before the start of freq
+            // Advance baseband so it's half a second before the start of freq
             let first_epoch = self.freqs.get_first_epoch().floor();
-            self.baseband.seek_epoch(first_epoch - 1.0);
+            self.baseband.seek_epoch(first_epoch - 0.2);
         }
 
         // Load the samples from the sources
@@ -138,14 +144,23 @@ impl Dsp {
     ) -> Self {
         let mut fft_planner = FftPlanner::new();
 
-        let adjust_fft = fft_planner.plan_fft_forward(settings.adjust_samps);
-        let adjust_ifft = fft_planner.plan_fft_inverse(settings.adjust_samps);
+        let fftsize_correlate = settings.correlate_samps * 2 - 1;
+        let fftsize_adjust = settings.adjust_samps * 2 - 1;
+
+        let mut abuf = Vec::new();
+        let mut bbuf = Vec::new();
+        assert!(settings.correlate_samps > settings.adjust_samps);
+        abuf.resize(fftsize_correlate, Sample::new(0.0, 0.0));
+        bbuf.resize(fftsize_correlate, Sample::new(0.0, 0.0));
+
+        let adjust_fft = fft_planner.plan_fft_forward(fftsize_adjust);
+        let adjust_ifft = fft_planner.plan_fft_inverse(fftsize_adjust);
         let mut adjust_scratch = Vec::<Sample>::new();
         adjust_scratch.resize(adjust_fft.get_inplace_scratch_len(), Sample::new(0.0, 0.0));
         assert_eq!(adjust_scratch.len(), adjust_ifft.get_inplace_scratch_len());
 
-        let correlate_fft = fft_planner.plan_fft_forward(settings.correlate_samps);
-        let correlate_ifft = fft_planner.plan_fft_inverse(settings.correlate_samps);
+        let correlate_fft = fft_planner.plan_fft_forward(fftsize_correlate);
+        let correlate_ifft = fft_planner.plan_fft_inverse(fftsize_correlate);
         let mut correlate_scratch = Vec::<Sample>::new();
         correlate_scratch.resize(
             correlate_fft.get_inplace_scratch_len(),
@@ -164,6 +179,8 @@ impl Dsp {
             correlate_ifft,
             correlate_scratch,
             first_run: true,
+            abuf,
+            bbuf
         }
     }
 }
@@ -186,29 +203,49 @@ fn zeropad_shortest(a: &mut Vec<Sample>, b: &mut Vec<Sample>, min_size: usize) {
 
 // Returns largest peak offset in samples and its PSR (peak-to-sidelobe ratio)
 // Offset is positive if b must be delayed to match a
+// abuf and bbuf must have len of 2*len(a) - 1
 // Mutates both buffers, leaving a with the result of the correlation
 fn correlate(
     fft: &Arc<dyn Fft<Scalar>>,
     ifft: &Arc<dyn Fft<Scalar>>,
     scratch: &mut Vec<Sample>,
-    a: &mut [Sample],
-    b: &mut [Sample],
+    a: &[Sample],
+    b: &[Sample],
+    abuf: &mut [Sample],
+    bbuf: &mut [Sample],
 ) -> (i32, Scalar) {
-    fft.process_with_scratch(a, scratch);
-    fft.process_with_scratch(b, scratch);
+    debug_assert_eq!(a.len(), b.len());
+    debug_assert_eq!(abuf.len(), bbuf.len());
+    debug_assert!(abuf.len() >= a.len());
+
+    abuf[0..a.len()].copy_from_slice(a);
+    bbuf[0..b.len()].copy_from_slice(b);
+    abuf[a.len()..].fill(Sample::new(0.0, 0.0));
+    bbuf[b.len()..].fill(Sample::new(0.0, 0.0));
+
+    fft.process_with_scratch(abuf, scratch);
+    fft.process_with_scratch(bbuf, scratch);
 
     // Multiply a by b's conjugate, storing in a
-    for pair in a.iter_mut().zip(b) {
+    for pair in abuf.iter_mut().zip(bbuf) {
         *pair.0 = *pair.0 * (*pair.1).conj();
     }
 
-    ifft.process_with_scratch(a, scratch);
+    ifft.process_with_scratch(abuf, scratch);
+
+    let csv_content = abuf.iter()
+        .map(|c| format!("{},{}", c.re, c.im))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    std::fs::write("debug.csv", format!("real,imag\n{}", csv_content)).unwrap();
+
 
     // We collect the maximum and second maximum absolute value, to get the PSR
     // (The max value is max[0], the second max is max[1]
     let mut max = [Scalar::NEG_INFINITY, Scalar::NEG_INFINITY];
     let mut maxidx: usize = 0;
-    for (idx, v) in a.iter().enumerate() {
+    for (idx, v) in abuf.iter().enumerate() {
         if v.abs() > max[0] {
             max[1] = max[0];
             max[0] = v.abs();
@@ -217,9 +254,9 @@ fn correlate(
     }
 
     let offset = {
-        if maxidx > a.len() / 2 - 1 {
+        if maxidx > abuf.len() / 2 - 1 {
             // a must be delayed to match b
-            -((a.len() - maxidx) as i32)
+            -((abuf.len() - maxidx) as i32)
         } else {
             // b must be delayed to match a
             maxidx as i32
