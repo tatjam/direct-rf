@@ -28,10 +28,13 @@ fn main() {
                                           baseband.get_center_freq(),
                                           baseband.get_sample_rate());
 
-    let correlate_time: f64 = pargs.opt_value_from_str(["-c", "--correlate"]).unwrap().unwrap_or(2.0);
+    // Must be reasonably greater than 1 second, as that's the clock granularity that SDR++ gives us
+    // TODO: This will change in the future if improved SDR++ time is used in the file name
+    let correlate_time: f64 = pargs.opt_value_from_str(["-c", "--correlate"]).unwrap().unwrap_or(4.0);
+    assert!(correlate_time > 1.0);
     let correlate_samps = (correlate_time * baseband.get_sample_rate() as f64).ceil() as usize;
 
-    let adjust_time: f64 = pargs.opt_value_from_str(["-a", "--adjust"]).unwrap().unwrap_or(0.25);
+    let adjust_time: f64 = pargs.opt_value_from_str(["-a", "--adjust"]).unwrap().unwrap_or(0.5);
     let adjust_samps = (adjust_time * baseband.get_sample_rate() as f64).ceil() as usize;
 
     let run_time: f64 = pargs.opt_value_from_str(["-r", "--run"]).unwrap().unwrap_or(10.0);
@@ -40,6 +43,9 @@ fn main() {
     let min_psr: f64 = pargs.opt_value_from_str(["-m", "--minpsr"]).unwrap().unwrap_or(20.0);
 
     let output_decimate: usize = pargs.opt_value_from_str(["-d", "--decimate"]).unwrap().unwrap_or(20);
+
+    assert!(correlate_samps < run_samps);
+    assert!(adjust_samps < run_samps);
 
     let dsp_settings = DspSettings {
         correlate_samps,

@@ -42,7 +42,7 @@ impl Dsp {
             let adjust_res = correlate(&baseband[0..self.settings.adjust_samps],
                                        &reference[0..self.settings.adjust_samps]);
 
-            if adjust_res.1 > self.settings.min_psr {
+            if adjust_res.1 >= self.settings.min_psr {
                 return adjust_res;
             }
         }
@@ -58,6 +58,12 @@ impl Dsp {
     // Find the product of the two signals, with offset and store that as the result
     // Decimate down to the output sample rate
     pub fn run_once(self: &mut Self) -> Vec<Sample> {
+        if self.first_run {
+            // Advance baseband so it's one second before the start of freq
+            let first_epoch = self.freqs.get_first_epoch().floor();
+            self.baseband.seek_epoch(first_epoch - 1.0);
+        }
+
         // Load the samples from the sources
         let mut baseband = self.baseband.get_next(self.settings.run_samps);
         let mut reference = self.freqs.get_next(self.settings.run_samps);
@@ -84,6 +90,7 @@ impl Dsp {
 
         debug_assert_eq!(baseband.len(), reference.len());
 
+        // TODO: Do mixing, low pass filter and then decimate to improve SNR
         // This does mixing (multiply the two signals) and decimation (take every nth sample)
         baseband.iter().zip(reference).map(|(a, b)| a*b).step_by(self.settings.output_decimate).collect()
     }

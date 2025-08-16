@@ -4,10 +4,11 @@
 use std::fs::File;
 use std::hint::unreachable_unchecked;
 use std::io::{BufRead, BufReader};
+use std::ops::Sub;
 use std::path::Path;
-use log::info;
+use log::{info, warn};
 use regex::Regex;
-use chrono::{TimeZone, Utc, DateTime};
+use chrono::{TimeZone, Utc, DateTime, TimeDelta};
 use rustfft::num_complex::Complex;
 use wave_stream::open_wav::OpenWav;
 use wave_stream::wave_reader::{OpenWavReader, StreamOpenWavReader, StreamWavReader};
@@ -91,6 +92,25 @@ impl StreamedBaseband {
         out
     }
 
+    // Advances the stream, without saving data, until the epoch indicated, assuming the
+    // recording starts exactly at start date. Remember to use some margin, as the actual
+    // start of recording may be anytime during the second
+    // TODO: This will change if SDR++ gets improved date merged
+    pub fn seek_epoch(self: &mut Self, epoch: f64) {
+        let start_epoch = self.start_date.timestamp() as f64 + (self.start_date.timestamp_subsec_nanos() as f64) * 1e-9;
+        let delta = epoch - start_epoch;
+        if delta < 0.0 {
+            warn!("Baseband is older than given epoch, not seeking");
+            return;
+        }
+        let num_samples = (delta * (self.sample_rate as f64)).floor() as usize;
+        info!("Seeking baseband {} samples to align with epoch {}", num_samples, epoch);
+
+        for i in 0..num_samples {
+            _ =self.wav.next();
+        }
+    }
+
     pub fn get_sample_rate(self: &Self) -> u32 {
         self.sample_rate
     }
@@ -98,6 +118,7 @@ impl StreamedBaseband {
     pub fn get_center_freq(self: &Self) -> f64 {
         self.center_freq
     }
+
 }
 
 #[derive(Copy, Clone)]
@@ -179,5 +200,9 @@ impl StreamedSamplesFreqs {
             tstep: 1.0 / (srate as f64),
             freqs,
         }
+    }
+
+    pub fn get_first_epoch(self: &Self) -> f64 {
+        return self.freqs[0].t;
     }
 }
