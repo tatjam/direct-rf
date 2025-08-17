@@ -29,21 +29,14 @@ fn main() {
     let output_decimate: usize = pargs.opt_value_from_str(["-d", "--decimate"]).unwrap().unwrap_or(20);
 
     let dsp_settings = DspSettings {
-        window_size: 1024,
-        window_step: 512,
+        window_size: 512,
+        window_step: 128,
+        spectrogram_size_search: 37500, // 2s at 2.4Msps with these settings
+        spectrogram_size_adjust: 5000, // A bit over 0.25s with these settings
+        spectrogram_adjust_slide: 2_400, // 1ms on each direction at 2.4Msps
         output_decimate,
         min_psr: min_psr as Scalar,
     };
 
     let mut dsp = Dsp::new(baseband, freqs, dsp_settings);
-    for i in 0..19 {
-        dsp.build_spectrogram(50);
-    }
-    let (spectrogram, nwindows) = dsp.build_spectrogram(850);
-
-    let file = File::create("dump.csv").unwrap();
-    let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
-    writer.serialize_array2(&spectrogram).unwrap();
-
-
 }
