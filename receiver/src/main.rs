@@ -1,7 +1,10 @@
+use std::fs::File;
+use csv::WriterBuilder;
 use log::info;
 use pico_args;
 use crate::dsp::{DspSettings, Dsp};
 use crate::stream::{StreamedBaseband, StreamedSamplesFreqs, Scalar};
+use ndarray_csv::Array2Writer;
 
 mod stream;
 mod dsp;
@@ -21,40 +24,26 @@ fn main() {
                                           baseband.get_center_freq(),
                                           baseband.get_sample_rate());
 
-    // Must be reasonably greater than 1 second, as that's the clock granularity that SDR++ gives us
-    // TODO: This will change in the future if improved SDR++ time is used in the file name
-    let correlate_time: f64 = pargs.opt_value_from_str(["-c", "--correlate"]).unwrap().unwrap_or(0.5);
-    //assert!(correlate_time > 1.0);
-    let correlate_samps =
-        ((correlate_time * baseband.get_sample_rate() as f64).ceil() as u64).next_power_of_two() as usize;
-
-    let adjust_time: f64 = pargs.opt_value_from_str(["-a", "--adjust"]).unwrap().unwrap_or(0.25);
-    let adjust_samps =
-        ((adjust_time * baseband.get_sample_rate() as f64).ceil() as u64).next_power_of_two() as usize;
-
-    let run_time: f64 = pargs.opt_value_from_str(["-r", "--run"]).unwrap().unwrap_or(4.0);
-    let run_samps =
-        ((run_time * baseband.get_sample_rate() as f64).ceil() as u64).next_power_of_two() as usize;
-
     let min_psr: f64 = pargs.opt_value_from_str(["-m", "--minpsr"]).unwrap().unwrap_or(20.0);
 
     let output_decimate: usize = pargs.opt_value_from_str(["-d", "--decimate"]).unwrap().unwrap_or(20);
 
-    println!("Using run_samps = {}, correlate_samps = {} and adjust_samps = {}",
-             run_samps, correlate_samps, adjust_samps);
-    assert!(correlate_samps < run_samps);
-    assert!(adjust_samps < run_samps);
-
     let dsp_settings = DspSettings {
-        correlate_samps,
-        adjust_samps,
-        run_samps,
+        window_size: 1024,
+        window_step: 512,
         output_decimate,
         min_psr: min_psr as Scalar,
     };
 
     let mut dsp = Dsp::new(baseband, freqs, dsp_settings);
-    dsp.run_once();
+    for i in 0..19 {
+        dsp.build_spectrogram(50);
+    }
+    let (spectrogram, nwindows) = dsp.build_spectrogram(850);
+
+    let file = File::create("dump.csv").unwrap();
+    let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
+    writer.serialize_array2(&spectrogram).unwrap();
 
 
 }

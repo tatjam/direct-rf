@@ -13,8 +13,9 @@ use wave_stream::open_wav::OpenWav;
 use wave_stream::samples_by_channel::SamplesByChannel;
 use wave_stream::wave_header::{Channels, SampleFormat, WavHeader};
 use wave_stream::wave_reader::{StreamOpenWavReader};
-use wave_stream::wave_writer::OpenWavWriter;
 use wave_stream::write_wav_to_file_path;
+
+use ndarray::prelude::*;
 
 pub type Scalar = f32;
 pub type Sample = Complex<Scalar>;
@@ -72,27 +73,25 @@ impl StreamedBaseband {
         }
     }
 
-    // If we run out of data, the vector will not have the same size as num_samples
-    pub fn get_next(self: &mut Self, num_samples: usize) -> Vec<Sample> {
-        let mut out = Vec::new();
+    // If we run out of data, the vector will not be overwritten!
+    // We return number of samples read
+    pub fn read_into(self: &mut Self, mut buf: ArrayViewMut1<Sample>) -> usize {
+        let mut num_samples_read = 0;
+        while let Some(Ok(samps)) = self.wav.next() {
+            if num_samples_read == buf.len() {
+                break;
+            }
 
-        for _ in 0..num_samples {
-            let samps = match self.wav.next() {
-                None => break,
-                Some(v) => match v {
-                    Ok(samp) => {samp}
-                    Err(_) => break,
-                }
-            };
             // SAFETY: Safe because we checked on object creation, we need this to run fast
             let left = samps.front_left.unwrap_or_else(|| unsafe{ unreachable_unchecked(); });
             let right = samps.front_right.unwrap_or_else(|| unsafe{ unreachable_unchecked(); });
 
             let iqsamp = Complex::new(left, right);
-            out.push(iqsamp);
+            buf[num_samples_read] = iqsamp;
+            num_samples_read += 1;
         }
 
-        out
+        num_samples_read
     }
 
     // Advances the stream, without saving data, until the epoch indicated, assuming the
@@ -151,18 +150,23 @@ impl StreamedSamplesFreqs {
         }
     }
 
-    // If we run out of data, the vector will not have the same size as num_samples
-    pub fn get_next(self: &mut Self, num_samples: usize) -> Vec<Sample> {
-        let mut out = Vec::new();
-        let mut num_written = 0;
+    // If we run out of data, the vector will be zero-padded
+    // We return number of samples read alongside them.
+    pub fn get_next(self: &mut Self, num_samples: usize) -> (Array1<Sample>, usize) {
+        let mut out = Array1::zeros(num_samples);
 
+        let mut num_written = 0;
         while let Some(pair) = self.find_freq_change_for(self.t) {
+            debug_assert!(num_written <= num_samples);
+            if num_written == num_samples {
+                break;
+            }
+
             let t_remains = pair.1.t - self.t;
             let samps_remain = (t_remains / self.tstep).ceil() as u64;
             let mut this_step_written: usize = 0;
 
             for _ in 0..samps_remain {
-                debug_assert!(num_written <= num_samples);
                 if num_written == num_samples {
                     break;
                 }
@@ -170,7 +174,7 @@ impl StreamedSamplesFreqs {
                 let rf = pair.0.freq - self.center_freq;
                 let w = 2.0 * std::f64::consts::PI * rf;
                 self.phase += w * self.tstep;
-                out.push(Complex::new(self.phase.sin() as Scalar, self.phase.cos() as Scalar));
+                out[num_written] = Sample::new(self.phase.sin() as Scalar, self.phase.cos() as Scalar);
 
                 num_written += 1;
                 this_step_written += 1;
@@ -180,12 +184,9 @@ impl StreamedSamplesFreqs {
             // Do it here instead
             self.t += self.tstep * this_step_written as f64;
 
-            if num_written == num_samples {
-                break;
-            }
         }
 
-        out
+        (out, num_written)
     }
 
     fn load_freqs(freqs_path: String) -> Vec<FreqChange> {
@@ -233,8 +234,8 @@ impl StreamedSamplesFreqs {
         let mut writer = open_wav.get_random_access_f32_writer().unwrap();
         let mut i = 0;
         loop {
-            let samples = self.get_next(10000);
-            if samples.len() == 0 {
+            let (samples, num_read) = self.get_next(10000);
+            if num_read == 0 {
                 break;
             }
 
