@@ -1,6 +1,7 @@
 //! Simple classes from streaming (non random access!) of samples, so that we can work with
 //! big files without hogging memory and having long load times.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::hint::unreachable_unchecked;
 use std::io::{BufRead, BufReader};
@@ -75,7 +76,7 @@ impl StreamedBaseband {
 
     // If we run out of data, the vector will not be overwritten!
     // We return number of samples read
-    pub fn read_into(self: &mut Self, mut buf: ArrayViewMut1<Sample>) -> usize {
+    pub fn read_into(self: &mut Self, mut buf: &mut[Sample]) -> usize {
         let mut num_samples_read = 0;
         while let Some(Ok(samps)) = self.wav.next() {
             if num_samples_read == buf.len() {
@@ -140,7 +141,37 @@ pub struct StreamedSamplesFreqs {
     center_freq: f64,
 }
 
+// Times relative to given start time
+pub struct FreqOnTimes {
+    freq: f64,
+    start: f64,
+    end: f64,
+}
+
 impl StreamedSamplesFreqs {
+    // Gets which frequencies are present on the interval of time starting at epoch
+    // start and continuing for samples, and at which times they are on.
+    // All samples are assumed to be relative to start epoch.
+    // Frequencies are truncated to integer Hz, but later on full recovery
+    // is possible (if it's even needed!)
+    pub fn get_frequencies_for_interval(&self, start: f64, dur: f64) -> HashMap<i64, Vec<FreqOnTimes>> {
+        let mut out = HashMap::new();
+
+        for pair in self.freqs.windows(2) {
+            if pair[0].t < start || pair[0].t > start + dur {
+                continue;
+            }
+
+            let elem: &mut Vec<FreqOnTimes> = out.entry(pair[0].freq as i64).or_default();
+            elem.push(FreqOnTimes{
+                freq: pair[0].freq,
+                start: pair[0].t - start,
+                end: pair[1].t - start,
+            });
+        }
+
+        out
+    }
 
     // Returns current, and next freq change for given time
     fn find_freq_change_for(self: &Self, t: f64) -> Option<(FreqChange, FreqChange)> {

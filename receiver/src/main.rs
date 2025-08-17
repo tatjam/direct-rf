@@ -31,7 +31,7 @@ fn main() {
     let dsp_settings = DspSettings {
         window_size: 512,
         window_step: 128,
-        spectrogram_size_search: 37500, // 2s at 2.4Msps with these settings
+        spectrogram_size_search: 75000, // 4s at 2.4Msps with these settings
         spectrogram_size_adjust: 5000, // A bit over 0.25s with these settings
         spectrogram_adjust_slide: 2_400, // 1ms on each direction at 2.4Msps
         output_decimate,
@@ -39,4 +39,5 @@ fn main() {
     };
 
     let mut dsp = Dsp::new(baseband, freqs, dsp_settings);
+    dsp.first_run();
 }
