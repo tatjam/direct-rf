@@ -1,15 +1,15 @@
+use crate::stream::{Sample, Scalar, StreamedBaseband, StreamedSamplesFreqs};
+use chrono::{DateTime, TimeDelta, Utc};
+use csv::WriterBuilder;
+use log::info;
+use ndarray::{Array1, Array2, ArrayViewMut1, s};
+use ndarray_csv::Array2Writer;
+use rustfft::num_complex::ComplexFloat;
+use rustfft::{Fft, FftPlanner};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Add;
-use crate::stream::{Sample, Scalar, StreamedBaseband, StreamedSamplesFreqs};
-use log::info;
-use rustfft::num_complex::ComplexFloat;
-use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
-use ndarray::{Array1, Array2, s, ArrayViewMut1};
-use chrono::{DateTime, TimeDelta, Utc};
-use csv::WriterBuilder;
-use ndarray_csv::Array2Writer;
 
 pub struct DspSettings {
     // Window size in samples.
@@ -74,9 +74,7 @@ pub struct Dsp {
 
     spectrogram: Spectrogram,
     spectrogram_buffer: Vec<Sample>,
-
 }
-
 
 impl Dsp {
     pub fn new(
@@ -93,8 +91,8 @@ impl Dsp {
         let mut hann_window = Array1::zeros(settings.window_size * 2);
         let n = settings.window_size - 1;
         for i in 0..settings.window_size {
-            hann_window[i*2] = (std::f64::consts::PI * (i as f64) / (n as f64)).sin() as Scalar;
-            hann_window[i*2+1] = hann_window[i];
+            hann_window[i * 2] = (std::f64::consts::PI * (i as f64) / (n as f64)).sin() as Scalar;
+            hann_window[i * 2 + 1] = hann_window[i];
         }
 
         let window_buffer = Array1::zeros(settings.window_size);
@@ -133,9 +131,12 @@ impl Dsp {
 
         // Collect enough samples to run the correlation
         self.spectrogram_buffer = Vec::new();
-        self.spectrogram_buffer.resize(nsamples, Sample::new(0.0, 0.0));
+        self.spectrogram_buffer
+            .resize(nsamples, Sample::new(0.0, 0.0));
 
-        let nread = self.baseband.read_into(self.spectrogram_buffer.as_mut_slice());
+        let nread = self
+            .baseband
+            .read_into(self.spectrogram_buffer.as_mut_slice());
 
         debug_assert_eq!(nread, nsamples);
 
@@ -145,7 +146,6 @@ impl Dsp {
         let delay = self.correlate_spectrogram();
 
         self.first_run = false;
-
     }
 
     fn build_spectrogram(&mut self) {
@@ -154,7 +154,8 @@ impl Dsp {
         self.spectrogram.start_sample += self.spectrogram.data.ncols() * self.settings.window_step;
 
         let nwindows = if self.overlap_data.is_empty() {
-            1 + (self.spectrogram_buffer.len() - self.settings.window_size) / self.settings.window_step
+            1 + (self.spectrogram_buffer.len() - self.settings.window_size)
+                / self.settings.window_step
         } else {
             self.spectrogram_buffer.len() / self.settings.window_step
         };
@@ -172,14 +173,14 @@ impl Dsp {
             self.apply_hann();
             self.fft_window();
             // Hopefully this will be done efficiently?
-            self.spectrogram.data.column_mut(window_ptr).assign(
-                &self.window_buffer.mapv(|v| v.abs())
-            );
+            self.spectrogram
+                .data
+                .column_mut(window_ptr)
+                .assign(&self.window_buffer.mapv(|v| v.abs()));
 
             buffer_ptr += nsamples;
             window_ptr += 1;
         }
-
     }
 
     fn dump_spectrogram(&self) {
@@ -195,11 +196,15 @@ impl Dsp {
         let data = &self.spectrogram_buffer[ptr..];
 
         let nsamp = if self.overlap_data.is_empty() {
-            self.overlap_data = Array1::zeros(self.settings.window_size - self.settings.window_step);
+            self.overlap_data =
+                Array1::zeros(self.settings.window_size - self.settings.window_step);
             // Full copy
             self.settings.window_size
         } else {
-            debug_assert_eq!(self.overlap_data.len(), self.settings.window_size - self.settings.window_step);
+            debug_assert_eq!(
+                self.overlap_data.len(),
+                self.settings.window_size - self.settings.window_step
+            );
             // Partial copy
             self.settings.window_step
         };
@@ -209,28 +214,33 @@ impl Dsp {
             return 0;
         }
 
-        as_slice[self.settings.window_size-nsamp..].copy_from_slice(&data[0..nsamp]);
+        as_slice[self.settings.window_size - nsamp..].copy_from_slice(&data[0..nsamp]);
 
         // The rest is loaded from the overlap data
         if nsamp != self.settings.window_size {
-            as_slice[0..self.settings.window_size - nsamp].copy_from_slice(
-                &self.overlap_data.as_slice().unwrap());
+            as_slice[0..self.settings.window_size - nsamp]
+                .copy_from_slice(&self.overlap_data.as_slice().unwrap());
         }
 
         // The next overlap data is copied over from the new slice
-        self.overlap_data.as_slice_mut().unwrap().copy_from_slice(
-            &as_slice[self.settings.window_step..]
-        );
+        self.overlap_data
+            .as_slice_mut()
+            .unwrap()
+            .copy_from_slice(&as_slice[self.settings.window_step..]);
 
         nsamp
     }
 
     // Returns how many samples the spectrogram has to be delayed to match the reference
-    fn correlate_spectrogram(&mut self) -> usize  {
-        let start_offset = self.spectrogram.start_sample as f64 / self.baseband.get_sample_rate() as f64;
+    fn correlate_spectrogram(&mut self) -> usize {
+        let start_offset =
+            self.spectrogram.start_sample as f64 / self.baseband.get_sample_rate() as f64;
         let start_t = self.spectrogram.sample0_epoch + start_offset;
-        let end_offset = self.spectrogram.data.ncols() as f64 / self.baseband.get_sample_rate() as f64;
-        let freqs = self.freqs.get_frequencies_for_interval(start_t, start_t + end_offset);
+        let end_offset =
+            self.spectrogram.data.ncols() as f64 / self.baseband.get_sample_rate() as f64;
+        let freqs = self
+            .freqs
+            .get_frequencies_for_interval(start_t, start_t + end_offset);
 
         for intfreq in freqs.keys() {
             let relfreq = *intfreq as f64 - self.baseband.get_center_freq();
@@ -244,7 +254,7 @@ impl Dsp {
             // SAFETY: All operations are correct as long as Complex = {Scalar, Scalar} in memory
             ArrayViewMut1::from_shape_ptr(
                 self.window_buffer.len() * 2,
-                self.window_buffer.as_mut_ptr() as *mut Scalar
+                self.window_buffer.as_mut_ptr() as *mut Scalar,
             )
         };
 
@@ -255,8 +265,7 @@ impl Dsp {
     fn fft_window(&mut self) {
         self.window_fft.process_with_scratch(
             self.window_buffer.as_slice_mut().unwrap(),
-            &mut self.window_fft_scratch);
+            &mut self.window_fft_scratch,
+        );
     }
-
-
 }

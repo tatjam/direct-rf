@@ -1,0 +1,15 @@
+[
+  {
+    "label": "Run receiver with demo baseband",
+    "adapter": "CodeLLDB",
+    "build": {
+      "command": "cargo",
+      "args": ["build", "-p", "receiver"]
+    },
+    "sourceLanguages": ["rust"],
+    "program": "$ZED_WORKTREE_ROOT/target/debug/receiver",
+    "request": "launch",
+    "args": ["/home/tatjam/rfreqs/baseband_7126300Hz_19-48-53_16-08-2025.wav"],
+    "cwd": "$ZED_WORKTREE_ROOT/software"
+  }
+]
