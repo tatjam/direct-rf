@@ -5,23 +5,25 @@ mod comm;
 mod sequencer;
 mod util;
 
+use crate::sequencer::SequencerState;
+use crate::util::InterruptAccessible;
+use common::comm_messages::UplinkMsg;
 use core::hint::black_box;
-use defmt_rtt as _;
-use panic_probe as _;
 use cortex_m_rt::entry;
 use defmt::export::panic;
-use stm32h7::{stm32h7s};
+use defmt_rtt as _;
+use panic_probe as _;
+use stm32h7::stm32h7s;
 use stm32h7::stm32h7s::Interrupt;
-use common::comm_messages::{UplinkMsg};
-use crate::sequencer::{SequencerState};
-use crate::util::InterruptAccessible;
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
     // Enable monitor output, dividing PLL1 clock frequency by 100
     // (Note this is not exactly the system frequency! It differs by divp)
-    rcc.cfgr().modify(|_, w| unsafe { w.mco1().pll1_q().mco1pre().bits(10) });
-    rcc.pll1divr1().modify(|_, w| unsafe { w.divq().bits(10 - 1) });
+    rcc.cfgr()
+        .modify(|_, w| unsafe { w.mco1().pll1_q().mco1pre().bits(10) });
+    rcc.pll1divr1()
+        .modify(|_, w| unsafe { w.divq().bits(10 - 1) });
     rcc.pllcfgr().modify(|_, w| w.divq1en().enabled());
 
     defmt::info!("Starting HSE");
@@ -36,13 +38,15 @@ fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
     // This PLL is also driven by HSE
     // Critically, note that TIM uses the bus clock, so we want reduced jitter
     // (We use a 24MHz clock and divide by 2 to get 12Mhz reference in PLL1)
-    rcc.pllckselr().modify(|_, w| w.divm1().set(2).pllsrc().hse());
+    rcc.pllckselr()
+        .modify(|_, w| w.divm1().set(2).pllsrc().hse());
     rcc.pllcfgr().modify(|_, w| w.pll1rge().range8());
 
     // Use the 384 to 1672MHz VCO
     rcc.pllcfgr().modify(|_, w| w.pll1vcosel().clear_bit());
     // This makes the VCO oscillate at 480MHz, and output a signal at 120MHz
-    rcc.pll1divr1().modify(|_, w| unsafe {w.divn1().bits(19).divp().bits(2 - 1)});
+    rcc.pll1divr1()
+        .modify(|_, w| unsafe { w.divn1().bits(19).divp().bits(2 - 1) });
     // Enable DIVP output
     rcc.pllcfgr().modify(|_, w| w.divp1en().enabled());
 
@@ -64,7 +68,6 @@ fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
         panic();
     }
     defmt::info!("System is clocked using PLL!");
-
 }
 
 // Launches GPIO peripheral and setups GPIO PC9 for fastest possible operation,
@@ -81,41 +84,43 @@ fn setup_gpio(rcc: &mut stm32h7s::RCC, gpioc: &mut stm32h7s::GPIOC) {
 
 fn handle_msg(msg: UplinkMsg, sequencer_state: &InterruptAccessible<SequencerState>) {
     match msg {
-        UplinkMsg::Ping() => {defmt::info!("Pong :)")}
+        UplinkMsg::Ping() => {
+            defmt::info!("Pong :)")
+        }
         UplinkMsg::PushPLLChange(ch) => {
             util::with(sequencer_state, |state| {
                 defmt::info!("Pushing PLLChange");
                 sequencer::push_pllchange(state, ch);
             });
-        },
+        }
         UplinkMsg::PushFracn(num, arr) => {
             util::with(sequencer_state, |state| {
                 defmt::info!("Pushing fracn");
                 sequencer::push_fracn(state, &arr[0..(num as usize)]);
                 defmt::info!("Done :)");
             });
-        },
+        }
         UplinkMsg::ClearBuffers() => {
             util::with(sequencer_state, |state| {
                 defmt::info!("Cleaning buffers");
                 sequencer::clear_buffers(state);
             });
-        },
+        }
         UplinkMsg::StartNow() => {
             util::with(sequencer_state, |state| {
                 defmt::info!("Launching");
                 sequencer::launch(state);
             });
-        },
+        }
         UplinkMsg::StopNow() => {
             util::with(sequencer_state, |state| {
                 defmt::info!("Stopping");
                 sequencer::stop(state);
             });
-        },
-        UplinkMsg::SetLooping(_) => {},
-        UplinkMsg::EpochNow(_) => {},
-        UplinkMsg::StartAtEpoch(_) => {},
+        }
+        UplinkMsg::SetLooping(_) => {}
+        UplinkMsg::EpochNow(_) => {}
+        UplinkMsg::StartAtEpoch(_) => {}
     }
 }
 
@@ -126,7 +131,6 @@ fn handle_msg(msg: UplinkMsg, sequencer_state: &InterruptAccessible<SequencerSta
 fn main() -> ! {
     let mut periph = stm32h7s::Peripherals::take().unwrap();
     defmt::info!("Hello directrf!");
-
 
     setup_hse(&mut periph.RCC, &mut periph.FLASH);
     setup_gpio(&mut periph.RCC, &mut periph.GPIOC);
@@ -140,9 +144,7 @@ fn main() -> ! {
     defmt::info!("Sequencer is setup!");
 
     loop {
-        let msg = util::with(comm_state, |state| {
-            comm::get_message(state)
-        });
+        let msg = util::with(comm_state, |state| comm::get_message(state));
 
         if let Some(v) = msg {
             handle_msg(v, sequencer_state);
@@ -151,6 +153,5 @@ fn main() -> ! {
                 black_box(i);
             }
         }
-
     }
 }

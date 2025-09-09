@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use crate::sequence::PLLChange;
+use serde::{Deserialize, Serialize};
 
 pub const MAX_UPLINK_MSG_SIZE: usize = 256;
 

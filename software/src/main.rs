@@ -1,18 +1,22 @@
-use std::fmt::Write;
-use std::{fs};
-use std::cmp::min;
-use std::io::{ErrorKind, Read};
-use std::time::{Duration, Instant};
-use serialport::{ClearBuffer, DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits};
-use regex::Regex;
-use common::sequence::{PLLChange, Sequence};
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
-use pico_args;
 use chrono;
 use chrono::{DateTime, Utc};
-use common::comm_messages::{UplinkMsg, MAX_UPLINK_MSG_SIZE};
-use common::comm_messages::UplinkMsg::{ClearBuffers, Ping, PushFracn, PushPLLChange, StartNow, StopNow};
+use common::comm_messages::UplinkMsg::{
+    ClearBuffers, Ping, PushFracn, PushPLLChange, StartNow, StopNow,
+};
+use common::comm_messages::{MAX_UPLINK_MSG_SIZE, UplinkMsg};
+use common::sequence::{PLLChange, Sequence};
+use pico_args;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
+use regex::Regex;
+use serialport::{
+    ClearBuffer, DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits,
+};
+use std::cmp::min;
+use std::fmt::Write;
+use std::fs;
+use std::io::{ErrorKind, Read};
+use std::time::{Duration, Instant};
 // Pseudorandom sequence (PRSeq) generation:
 // A file is used to read the "order frequencies" (used to fine-tune the system),
 // which specifies a series of intervals in time and frequency where a
@@ -29,10 +33,12 @@ fn find_port() -> Result<String, &'static str> {
     let ports = serialport::available_ports().unwrap();
     for port in ports {
         if let SerialPortType::UsbPort(info) = port.port_type {
-            if let Some(m) = info.manufacturer { if m == "STMicroelectronics" {
-                println!("Chosen port {}", port.port_name);
-                return Ok(port.port_name);
-            }}
+            if let Some(m) = info.manufacturer {
+                if m == "STMicroelectronics" {
+                    println!("Chosen port {}", port.port_name);
+                    return Ok(port.port_name);
+                }
+            }
         }
     }
 
@@ -60,7 +66,7 @@ fn parse_orders(file: String) -> Result<Vec<FrequencyOrder>, &'static str> {
             t_us: captures.get(1).unwrap().as_str().parse().unwrap(),
             freq_hz: captures.get(2).unwrap().as_str().parse().unwrap(),
             bandwidth_hz: captures.get(3).unwrap().as_str().parse().unwrap(),
-            n: captures.get(4).unwrap().as_str().parse().unwrap()
+            n: captures.get(4).unwrap().as_str().parse().unwrap(),
         })
     }
 
@@ -71,7 +77,6 @@ struct SubSequence {
     change: PLLChange,
     fracn: Vec<u16>,
 }
-
 
 fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'static str> {
     let mut fracn_buf = Vec::new();
@@ -84,7 +89,7 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
     let fhigh = order.freq_hz as f64 + 0.5 * order.bandwidth_hz as f64;
     let flow = order.freq_hz as f64 - 0.5 * order.bandwidth_hz as f64;
     if fhigh <= flow || flow <= 0.0 {
-       return Err("Invalid configuration");
+        return Err("Invalid configuration");
     }
     let divnf = fhigh / (fhigh - flow) - 2.0;
     let divpf = FREF_HZ * (2.0 + divnf) / fhigh;
@@ -107,8 +112,14 @@ fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'
         false
     } else {
         println!("divnf = {} divpf = {}", divnf, divpf);
-        println!("min_vcofreq_0 = {} max_vcofreq_0 = {}", min_vcofreq_0, max_vcofreq_0);
-        println!("min_vcofreq_1 = {} max_vcofreq_1 = {}", min_vcofreq_1, max_vcofreq_1);
+        println!(
+            "min_vcofreq_0 = {} max_vcofreq_0 = {}",
+            min_vcofreq_0, max_vcofreq_0
+        );
+        println!(
+            "min_vcofreq_1 = {} max_vcofreq_1 = {}",
+            min_vcofreq_1, max_vcofreq_1
+        );
         return Err("No VCO configuration satisfies desired frequency range");
     };
 
@@ -165,7 +176,9 @@ fn build_sequence(orders: Vec<FrequencyOrder>, seed: u64) -> Result<Sequence, &'
         let mut subseq = build_subsequence(order, seed)?;
         // Offset PLLChange index!
         subseq.change.start_tick += out.fracn_buffer.len();
-        out.pllchange_buffer.push(subseq.change).unwrap_or_else(|_| panic!());
+        out.pllchange_buffer
+            .push(subseq.change)
+            .unwrap_or_else(|_| panic!());
         for fracni in subseq.fracn {
             out.fracn_buffer.push(fracni).unwrap();
         }
@@ -296,12 +309,15 @@ fn main() {
         println!("Running in dry mode");
     }
 
+    let orders_path: String = pargs
+        .opt_free_from_str()
+        .unwrap()
+        .unwrap_or(String::from("orders.csv"));
 
-    let orders_path: String = pargs.opt_free_from_str()
-        .unwrap().unwrap_or(String::from("orders.csv"));
-
-    let out_path: String = pargs.opt_value_from_str("--out")
-        .unwrap().unwrap_or(String::from("freqs.csv"));
+    let out_path: String = pargs
+        .opt_value_from_str("--out")
+        .unwrap()
+        .unwrap_or(String::from("freqs.csv"));
 
     let orders = parse_orders(fs::read_to_string(orders_path).unwrap()).unwrap();
     println!("Read {} orders", orders.len());
@@ -309,17 +325,24 @@ fn main() {
     let date_str: Option<String> = pargs.opt_value_from_str("--date").unwrap();
     let date = match date_str {
         None => chrono::Utc::now(),
-        Some(str) =>
-            chrono::DateTime::parse_from_rfc2822(str.as_str()).unwrap().to_utc(),
+        Some(str) => chrono::DateTime::parse_from_rfc2822(str.as_str())
+            .unwrap()
+            .to_utc(),
     };
     let start_epoch = find_start_epoch(date);
-    println!("Sequence will start at epoch {}, which is {}s from now", start_epoch,
-             start_epoch - chrono::Utc::now().timestamp());
+    println!(
+        "Sequence will start at epoch {}, which is {}s from now",
+        start_epoch,
+        start_epoch - chrono::Utc::now().timestamp()
+    );
 
     // Note that this seeding is good enough as rand does some "entropy increasing" on the seed
     let seq = build_sequence(orders, start_epoch as u64).unwrap();
-    println!("Built sequence with {} pll changes and {} fracn values",
-             seq.pllchange_buffer.len(), seq.fracn_buffer.len());
+    println!(
+        "Built sequence with {} pll changes and {} fracn values",
+        seq.pllchange_buffer.len(),
+        seq.fracn_buffer.len()
+    );
     let freqs = build_frequencies(&seq, start_epoch);
     fs::write(&out_path, frequencies_to_str(&freqs)).unwrap();
     println!("Written frequencies to file {}", out_path);
@@ -332,7 +355,8 @@ fn main() {
             .parity(Parity::None)
             .stop_bits(StopBits::One)
             .data_bits(DataBits::Eight)
-            .open().expect("Failed to open STM32 port");
+            .open()
+            .expect("Failed to open STM32 port");
 
         // Send the sequence
         send(&mut port, &StopNow());
@@ -341,14 +365,11 @@ fn main() {
 
         println!("Waiting to start sequence");
         // Trigger the start at a relatively precise time
-        while Utc::now().timestamp() < start_epoch {
+        /*while Utc::now().timestamp() < start_epoch {
             std::thread::sleep(Duration::from_millis(100));
-        }
+        }*/
 
         send(&mut port, &StartNow());
         println!("Sequence started");
-
     }
-
-
 }

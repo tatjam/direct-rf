@@ -38,8 +38,6 @@ fn main() {
         .unwrap()
         .unwrap_or(20);
 
-    let guamedo = output_decimate.rotate_left(3);
-
     let dsp_settings = DspSettings {
         window_size: 512,
         window_step: 128,

@@ -1,0 +1,10 @@
+[
+  {
+    "label": "Upload firmware and run",
+    "env": {
+      "DEFMT_LOG": "info"
+    },
+    "cwd": "$ZED_WORKTREE_ROOT/firmware",
+    "command": "cargo run --package firmware --bin firmware --profile release"
+  }
+]

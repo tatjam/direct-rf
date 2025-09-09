@@ -1,14 +1,13 @@
-use crate::stream::{Sample, Scalar, StreamedBaseband, StreamedSamplesFreqs};
-use chrono::{DateTime, TimeDelta, Utc};
+use crate::stream::{FreqOnTimes, Sample, Scalar, StreamedBaseband, StreamedSamplesFreqs};
 use csv::WriterBuilder;
-use log::info;
-use ndarray::{Array1, Array2, ArrayViewMut1, s};
+use ndarray::{Array1, Array2, ArrayViewMut1, azip, s};
 use ndarray_csv::Array2Writer;
+use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use rustfft::num_complex::ComplexFloat;
+use rustfft::num_traits::Zero;
 use rustfft::{Fft, FftPlanner};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
-use std::ops::Add;
 use std::sync::Arc;
 
 pub struct DspSettings {
@@ -40,6 +39,131 @@ struct Spectrogram {
     start_sample_confidence: Scalar,
     // Set during first run, afterward corrections use other mechanism
     sample0_epoch: f64,
+}
+
+struct ReferenceSpectrogramLine {
+    data: Array1<Scalar>,
+    num_entries: usize,
+}
+
+struct ReferenceSpectrogram {
+    lines: HashMap<usize, ReferenceSpectrogramLine>,
+    window_size: f64,
+    samp_rate: f64,
+    cols: usize,
+}
+
+impl ReferenceSpectrogram {
+    pub fn new(window_size: f64, samp_rate: f64, cols: usize) -> Self {
+        Self {
+            lines: HashMap::new(),
+            window_size,
+            samp_rate,
+            cols,
+        }
+    }
+
+    fn get_line_ref(&mut self, bin: usize) -> &mut ReferenceSpectrogramLine {
+        let entry = self
+            .lines
+            .entry(bin)
+            .or_insert_with(|| ReferenceSpectrogramLine {
+                num_entries: 0,
+                data: Array1::zeros(self.cols),
+            });
+
+        entry
+    }
+
+    // Searches the line with the most entries, gets it and removes it
+    // Returns the (bin, line) pair.
+    fn pull_biggest_line_ref(&mut self) -> Option<(usize, &mut Array1<Scalar>)> {
+        let mut max_entries = 0;
+        let mut max_entries_line: Option<usize> = None;
+
+        for line in &self.lines {
+            if line.1.num_entries > max_entries {
+                max_entries = line.1.num_entries;
+                max_entries_line = Some(*line.0);
+            }
+        }
+
+        Some((
+            max_entries_line?,
+            &mut self.lines.get_mut(&max_entries_line?)?.data,
+        ))
+    }
+
+    fn add_entry_to_line(&mut self, bin: usize, min_index: usize, max_index: usize, fac: f32) {
+        let line = self.get_line_ref(bin);
+        line.data
+            .slice_mut(s![min_index..max_index])
+            .mapv_inplace(|v| v + fac);
+        line.num_entries += 1;
+    }
+
+    fn add_freq(&mut self, freq: &FreqOnTimes) {
+        let Some(bins) = self.hz_to_bin(freq.freq) else {
+            return;
+        };
+
+        let min_index = 0;
+        let max_index = 50;
+
+        self.add_entry_to_line(bins.0.0, min_index, max_index, bins.0.1);
+        self.add_entry_to_line(bins.1.0, min_index, max_index, bins.1.1);
+    }
+
+    // Given index of bin in spectrogram FFT, returns the center frequency of said bin
+    fn bin_to_hz(&self, bin: usize) -> f64 {
+        let binf = bin as f64;
+        debug_assert!(binf < self.window_size);
+        let hz_per_bin = self.samp_rate / self.window_size;
+
+        if binf > self.window_size / 2.0 {
+            // Bin represents negative frequency, we map
+            // bin N/2 -> -SampRate / 2 (technically not included)
+            // bin N-1 -> -SampRate / N
+            (binf - self.window_size) * hz_per_bin
+        } else {
+            // Bin represents positive frequency, we map
+            // bin 0 -> 0Hz
+            // bin N/2 -> SampRate / 2
+            binf * hz_per_bin
+        }
+    }
+
+    // Given frequency, returns the two nearest bins and their linear weight factor
+    // or None if out of bounds
+    fn hz_to_bin(&self, f: f64) -> Option<((usize, Scalar), (usize, Scalar))> {
+        let equivf = if f < 0.0 {
+            // Negative frequency is located on the FFT as if it were over Nyquist
+            self.samp_rate + f
+        } else {
+            f
+        };
+
+        debug_assert!(equivf >= 0.0);
+
+        let hz_per_bin = self.samp_rate / self.window_size;
+        let fract_bin = equivf / hz_per_bin;
+
+        if equivf >= self.window_size {
+            return None;
+        }
+
+        let upper = fract_bin.ceil();
+        let upperfac = (upper - fract_bin) / hz_per_bin;
+        let lower = fract_bin.floor();
+        let lowerfac = (fract_bin - lower) / hz_per_bin;
+
+        debug_assert!(upperfac + lowerfac >= 0.999);
+
+        Some((
+            (lower as usize, lowerfac as Scalar),
+            (upper as usize, upperfac as Scalar),
+        ))
+    }
 }
 
 // The algorithm is as follows:
@@ -74,6 +198,9 @@ pub struct Dsp {
 
     spectrogram: Spectrogram,
     spectrogram_buffer: Vec<Sample>,
+    correlate_fft: Arc<dyn RealToComplex<Scalar>>,
+    correlate_ifft: Arc<dyn ComplexToReal<Scalar>>,
+    correlate_fft_scratch: Vec<Sample>,
 }
 
 impl Dsp {
@@ -104,6 +231,17 @@ impl Dsp {
             sample0_epoch: 0.0,
         };
 
+        let mut real_planner = RealFftPlanner::<Scalar>::new();
+        let correlate_fft = real_planner.plan_fft_forward(settings.spectrogram_size_search);
+        let correlate_ifft = real_planner.plan_fft_inverse(settings.spectrogram_size_search);
+        let mut correlate_fft_scratch = Vec::new();
+        correlate_fft_scratch.resize(correlate_fft.get_scratch_len(), Sample::zero());
+
+        assert_eq!(
+            correlate_fft_scratch.len(),
+            correlate_ifft.get_scratch_len()
+        );
+
         Self {
             baseband,
             freqs,
@@ -116,6 +254,9 @@ impl Dsp {
             window_buffer,
             spectrogram,
             spectrogram_buffer: Default::default(),
+            correlate_fft,
+            correlate_ifft,
+            correlate_fft_scratch,
         }
     }
 
@@ -242,8 +383,61 @@ impl Dsp {
             .freqs
             .get_frequencies_for_interval(start_t, start_t + end_offset);
 
-        for intfreq in freqs.keys() {
-            let relfreq = *intfreq as f64 - self.baseband.get_center_freq();
+        let mut ref_spectrogram = ReferenceSpectrogram::new(
+            self.settings.window_size as f64,
+            self.baseband.get_sample_rate() as f64,
+            self.settings.spectrogram_size_search,
+        );
+
+        for freq in &freqs {
+            ref_spectrogram.add_freq(freq);
+        }
+
+        let n = self.settings.spectrogram_size_search;
+        let mut accum_corr: Array1<Scalar> = Array1::zeros(n);
+
+        // Scratch buffers to perform the FFTs in
+
+        // TODO: Everything here is terribly inneficient as a lot of copies
+        // are done. We could be smarter and perform the FFT in place!
+        let mut scratch_a: Array1<Scalar> = Array1::zeros(n * 2);
+        let mut scratch_b: Array1<Scalar> = Array1::zeros(n * 2);
+        let mut fft_a: Array1<Sample> = Array1::zeros(n + 1);
+        let mut fft_b: Array1<Sample> = Array1::zeros(n + 1);
+
+        // Correlate lines with the most entries until a good result is achieved
+        while let Some((bin, line)) = ref_spectrogram.pull_biggest_line_ref() {
+            // Move the measured line into scratch_a and zero the rest
+            scratch_a
+                .slice_mut(s![..n])
+                // TODO: Check that flatten is a no-op in this case
+                .assign(&self.spectrogram.data.slice(s![bin, ..]).flatten());
+            scratch_a.slice_mut(s![n..]).fill(0.0);
+            // Move the reference line into scratch_b and zero the rest
+            scratch_b.slice_mut(s![..n]).assign(line);
+            scratch_b.slice_mut(s![n..]).fill(0.0);
+
+            // FFT both for fast convolution
+            self.correlate_fft
+                .process_with_scratch(
+                    scratch_a.as_slice_mut().unwrap(),
+                    fft_a.as_slice_mut().unwrap(),
+                    self.correlate_fft_scratch.as_mut_slice(),
+                )
+                .unwrap();
+
+            self.correlate_fft
+                .process_with_scratch(
+                    scratch_b.as_slice_mut().unwrap(),
+                    fft_b.as_slice_mut().unwrap(),
+                    self.correlate_fft_scratch.as_mut_slice(),
+                )
+                .unwrap();
+
+            // Multiply together (convolve in time domain)
+            azip!((a in &mut fft_a, &b in &fft_b) *a = *a * b);
+
+            // Return to time domain
         }
 
         0
@@ -252,6 +446,7 @@ impl Dsp {
     fn apply_hann(&mut self) {
         let mut wbuffer_as_scalars = unsafe {
             // SAFETY: All operations are correct as long as Complex = {Scalar, Scalar} in memory
+            //
             ArrayViewMut1::from_shape_ptr(
                 self.window_buffer.len() * 2,
                 self.window_buffer.as_mut_ptr() as *mut Scalar,

@@ -55,7 +55,7 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
         up_to: usize,
         ptrs: &mut RingBufferPtrs,
         num_read: &mut usize,
-        seek: Option<T>
+        seek: Option<T>,
     ) -> bool {
         assert!(ptrs.read <= up_to);
         assert!(ptrs.read <= L);
@@ -75,11 +75,11 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
             ptrs.read += 1;
             *num_read += 1;
 
-            if let Some(v) = seek { if v == target[*num_read - 1] {
-                break;
-            }}
-
-
+            if let Some(v) = seek {
+                if v == target[*num_read - 1] {
+                    break;
+                }
+            }
         }
 
         ptrs.read == up_to
@@ -180,11 +180,10 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
 
     pub fn new() -> Self {
         Self {
-            data: SingleThreadUnsafeCell{0: core::cell::UnsafeCell::new([T::default(); L])},
-            read_write_ptrs: Mutex::new(Cell::new(RingBufferPtrs {
-                read: 0,
-                write: 0,
-            }))
+            data: SingleThreadUnsafeCell {
+                0: core::cell::UnsafeCell::new([T::default(); L]),
+            },
+            read_write_ptrs: Mutex::new(Cell::new(RingBufferPtrs { read: 0, write: 0 })),
         }
     }
 }

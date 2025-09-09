@@ -1,19 +1,19 @@
 //! Simple classes from streaming (non random access!) of samples, so that we can work with
 //! big files without hogging memory and having long load times.
 
+use chrono::{DateTime, TimeZone, Utc};
+use log::{info, warn};
+use regex::Regex;
+use rustfft::num_complex::Complex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::hint::unreachable_unchecked;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use log::{info, warn};
-use regex::Regex;
-use chrono::{TimeZone, Utc, DateTime};
-use rustfft::num_complex::Complex;
 use wave_stream::open_wav::OpenWav;
 use wave_stream::samples_by_channel::SamplesByChannel;
 use wave_stream::wave_header::{Channels, SampleFormat, WavHeader};
-use wave_stream::wave_reader::{StreamOpenWavReader};
+use wave_stream::wave_reader::StreamOpenWavReader;
 use wave_stream::write_wav_to_file_path;
 
 use ndarray::prelude::*;
@@ -34,7 +34,9 @@ impl StreamedBaseband {
         info!("Loading baseband from {}", path);
         // TODO: For now we assume time is in local timezone, but I've made a SDR++ feature request that
         // TODO: would allow timezones to be specified in the filename (or simply the filenames being UTC)
-        let date_regex = Regex::new(r".*/baseband_(\d+)Hz_(\d+)-(\d+)-(\d+)_(\d+)-(\d+)-(\d+).*\.wav").expect("Good Regex");
+        let date_regex =
+            Regex::new(r".*/baseband_(\d+)Hz_(\d+)-(\d+)-(\d+)_(\d+)-(\d+)-(\d+).*\.wav")
+                .expect("Good Regex");
         let (freq, date) = match date_regex.captures(path.as_str()) {
             None => panic!("Unable to parse baseband filename, use $t_$f_$h-$m-$s_$d-$M-$y"),
             Some(captures) => {
@@ -47,11 +49,13 @@ impl StreamedBaseband {
                 let year = captures.get(7).unwrap().as_str().parse().unwrap();
 
                 // TODO: Add timezone detection / UTC once SDR++ supports it
-                let date = chrono::Local.with_ymd_and_hms(year, month, day, hour, min, sec)
-                    .unwrap().to_utc();
+                let date = chrono::Local
+                    .with_ymd_and_hms(year, month, day, hour, min, sec)
+                    .unwrap()
+                    .to_utc();
 
                 (freq, date)
-            },
+            }
         };
 
         info!("Understood file as starting in {}", date);
@@ -76,7 +80,7 @@ impl StreamedBaseband {
 
     // If we run out of data, the vector will not be overwritten!
     // We return number of samples read
-    pub fn read_into(self: &mut Self, mut buf: &mut[Sample]) -> usize {
+    pub fn read_into(self: &mut Self, mut buf: &mut [Sample]) -> usize {
         let mut num_samples_read = 0;
         while let Some(Ok(samps)) = self.wav.next() {
             if num_samples_read == buf.len() {
@@ -84,8 +88,12 @@ impl StreamedBaseband {
             }
 
             // SAFETY: Safe because we checked on object creation, we need this to run fast
-            let left = samps.front_left.unwrap_or_else(|| unsafe{ unreachable_unchecked(); });
-            let right = samps.front_right.unwrap_or_else(|| unsafe{ unreachable_unchecked(); });
+            let left = samps.front_left.unwrap_or_else(|| unsafe {
+                unreachable_unchecked();
+            });
+            let right = samps.front_right.unwrap_or_else(|| unsafe {
+                unreachable_unchecked();
+            });
 
             let iqsamp = Complex::new(left, right);
             buf[num_samples_read] = iqsamp;
@@ -100,17 +108,21 @@ impl StreamedBaseband {
     // start of recording may be anytime during the second
     // TODO: This will change if SDR++ gets improved date merged
     pub fn seek_epoch(self: &mut Self, epoch: f64) {
-        let start_epoch = self.start_date.timestamp() as f64 + (self.start_date.timestamp_subsec_nanos() as f64) * 1e-9;
+        let start_epoch = self.start_date.timestamp() as f64
+            + (self.start_date.timestamp_subsec_nanos() as f64) * 1e-9;
         let delta = epoch - start_epoch;
         if delta < 0.0 {
             warn!("Baseband is older than given epoch, not seeking");
             return;
         }
         let num_samples = (delta * (self.sample_rate as f64)).floor() as usize;
-        info!("Seeking baseband {} samples to align with epoch {}", num_samples, epoch);
+        info!(
+            "Seeking baseband {} samples to align with epoch {}",
+            num_samples, epoch
+        );
 
         for _ in 0..num_samples {
-            _ =self.wav.next();
+            _ = self.wav.next();
         }
 
         info!("Done");
@@ -123,13 +135,12 @@ impl StreamedBaseband {
     pub fn get_center_freq(self: &Self) -> f64 {
         self.center_freq
     }
-
 }
 
 #[derive(Copy, Clone)]
 struct FreqChange {
     t: f64,
-    freq: f64
+    freq: f64,
 }
 
 // Allows streaming samples from a frequencies file, without fully loading them in memory
@@ -143,27 +154,24 @@ pub struct StreamedSamplesFreqs {
 
 // Times relative to given start time
 pub struct FreqOnTimes {
-    freq: f64,
-    start: f64,
-    end: f64,
+    pub freq: f64,
+    pub start: f64,
+    pub end: f64,
 }
 
 impl StreamedSamplesFreqs {
     // Gets which frequencies are present on the interval of time starting at epoch
     // start and continuing for samples, and at which times they are on.
     // All samples are assumed to be relative to start epoch.
-    // Frequencies are truncated to integer Hz, but later on full recovery
-    // is possible (if it's even needed!)
-    pub fn get_frequencies_for_interval(&self, start: f64, dur: f64) -> HashMap<i64, Vec<FreqOnTimes>> {
-        let mut out = HashMap::new();
+    pub fn get_frequencies_for_interval(&self, start: f64, dur: f64) -> Vec<FreqOnTimes> {
+        let mut out = Vec::new();
 
         for pair in self.freqs.windows(2) {
             if pair[0].t < start || pair[0].t > start + dur {
                 continue;
             }
 
-            let elem: &mut Vec<FreqOnTimes> = out.entry(pair[0].freq as i64).or_default();
-            elem.push(FreqOnTimes{
+            out.push(FreqOnTimes {
                 freq: pair[0].freq,
                 start: pair[0].t - start,
                 end: pair[1].t - start,
@@ -175,7 +183,11 @@ impl StreamedSamplesFreqs {
 
     // Returns current, and next freq change for given time
     fn find_freq_change_for(self: &Self, t: f64) -> Option<(FreqChange, FreqChange)> {
-        match self.freqs.windows(2).find(|pair| pair[0].t <= t && pair[1].t > t) {
+        match self
+            .freqs
+            .windows(2)
+            .find(|pair| pair[0].t <= t && pair[1].t > t)
+        {
             None => None,
             Some(v) => Some((v[0], v[1])),
         }
@@ -205,7 +217,8 @@ impl StreamedSamplesFreqs {
                 let rf = pair.0.freq - self.center_freq;
                 let w = 2.0 * std::f64::consts::PI * rf;
                 self.phase += w * self.tstep;
-                out[num_written] = Sample::new(self.phase.sin() as Scalar, self.phase.cos() as Scalar);
+                out[num_written] =
+                    Sample::new(self.phase.sin() as Scalar, self.phase.cos() as Scalar);
 
                 num_written += 1;
                 this_step_written += 1;
@@ -214,7 +227,6 @@ impl StreamedSamplesFreqs {
 
             // Do it here instead
             self.t += self.tstep * this_step_written as f64;
-
         }
 
         (out, num_written)
@@ -231,10 +243,7 @@ impl StreamedSamplesFreqs {
             let t = regex_match.get(1).unwrap().as_str().parse().unwrap();
             let freq = regex_match.get(2).unwrap().as_str().parse().unwrap();
 
-            out.push(FreqChange{
-                t,
-                freq
-            });
+            out.push(FreqChange { t, freq });
         }
 
         out
