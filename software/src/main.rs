@@ -95,11 +95,11 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
     while numtry < RETRIES {
         port.write_all(data).unwrap();
         port.flush().unwrap();
-        println!(
+        /*println!(
             "Sent {} try {}, waiting for reply...",
             uplink_to_str(msg),
             numtry + 1
-        );
+        );*/
 
         let mut read_buffer: [u8; 1] = [0];
         let try_read = port.read(&mut read_buffer);
@@ -116,7 +116,7 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
             println!("NoAck received, trying again!");
             // no ack, try again...
         } else {
-            println!("Ok!");
+            //println!("Ok!");
             return Ok(());
         }
         numtry += 1;
@@ -140,6 +140,7 @@ fn sleep_until_precise(start_date: DateTime<Utc>, until_off_us: i64) {
             // Ready to start
             break;
         } else if remain > BUSY_LOOP_MARGIN_US {
+            println!("Sleeping for {}us", remain - BUSY_LOOP_MARGIN_US);
             std::thread::sleep(Duration::from_micros((remain - BUSY_LOOP_MARGIN_US) as u64));
         } else {
             // Busy loop

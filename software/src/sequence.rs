@@ -140,7 +140,7 @@ pub fn build_sequence(
 
 // Returns upload time estimate in us
 pub fn estimate_upload_time(_seq: &Sequence) -> u64 {
-    1_000_000
+    3_000_000
 }
 
 // start_tstamp is the (approximate) time the sequence will start
@@ -157,17 +157,25 @@ pub fn build_upload_plan(orders: Vec<FrequencyOrder>, start_tstamp: i64) -> Uplo
         // Uploads must be well ordered, this could happen if a sequence is too short (<1 second)
         assert!(net_off_us > last_upload_off_us);
 
+        println!(
+            "Order with toff_us = {} landing at net_off_us = {}",
+            toff_us, net_off_us
+        );
         out.insert(net_off_us, seq);
         last_upload_off_us = net_off_us;
     };
+
+    let mut step_us = 0;
 
     for order in &orders {
         let maybe_done = build_sequence(order, &mut work_seq, toff_us, start_tstamp);
 
         if let Some(done_seq) = maybe_done {
             complete_order(done_seq, toff_us);
+            toff_us += step_us;
+            step_us = 0;
         }
-        toff_us += order.t_us as u64;
+        step_us += order.t_us as u64;
     }
 
     complete_order(work_seq, toff_us);

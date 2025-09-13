@@ -27,9 +27,9 @@ impl<T: Default> DoubleBuffer<T> {
 
     fn get_back(&mut self) -> &mut T {
         if self.active_0 {
-            &mut self.buffers[0]
-        } else {
             &mut self.buffers[1]
+        } else {
+            &mut self.buffers[0]
         }
     }
 
@@ -141,6 +141,10 @@ fn step(state: &mut SequencerState) {
             return;
         }
     }
+    defmt::info!(
+        "Step into PLLChange with {} ticks",
+        state.seqs.get_active().pllchange_buffer[state.pllchangei as usize].for_ticks
+    );
 
     // Disable TIM
     state.tim.cr1().modify(|_, w| w.cen().disabled());
@@ -179,6 +183,9 @@ fn set_timer(state: &mut SequencerState) {
 
 pub fn launch(state: &mut SequencerState) {
     stop(state);
+    // A buffer must have been uploaded previously to the backbuffer...
+    assert!(!state.uploading);
+    state.seqs.active_0 = !state.seqs.active_0;
     // Set up the PLL for the first state
     state.pllchangei = -1;
     state.is_running = true;
@@ -187,7 +194,6 @@ pub fn launch(state: &mut SequencerState) {
 }
 
 pub fn clear_buffers(state: &mut SequencerState) {
-    stop(state);
     state.seqs.get_back().fracn_buffer.clear();
     state.seqs.get_back().pllchange_buffer.clear();
 }
