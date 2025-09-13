@@ -6,7 +6,6 @@ use crate::util;
 use crate::util::InterruptAccessible;
 use common::sequence::{PLLChange, Sequence};
 use core::mem::MaybeUninit;
-use heapless::Vec;
 use stm32h7::stm32h7s;
 use stm32h7::stm32h7s::{Interrupt, interrupt};
 
@@ -251,6 +250,7 @@ pub fn setup(
             .borrow(cs)
             .replace(MaybeUninit::new(SequencerState {
                 seqs: DoubleBuffer::new(),
+                uploading: false,
                 pllchangei: 0,
                 rcc,
                 tim,

@@ -106,7 +106,6 @@ pub fn build_subsequence(order: &FrequencyOrder, seed: u64) -> Result<SubSequenc
 pub fn build_sequence(
     order: &FrequencyOrder,
     base: &mut Sequence,
-    is_last: bool,
     toff_us: u64,
     t_start: i64,
 ) -> Option<Sequence> {
@@ -116,9 +115,10 @@ pub fn build_sequence(
     let seed = 0;
 
     let mut subseq = build_subsequence(order, seed).unwrap();
+    assert!(subseq.fracn.len() < MAX_SEQUENCE_LEN);
+
     if base.fracn_buffer.len() + subseq.fracn.len() > MAX_SEQUENCE_LEN
         || base.pllchange_buffer.len() + 1 > MAX_DIVN_CHANGES
-        || is_last
     {
         // We ran out of space in the base seq, create a new one
         out = Some(base.expensive_copy());
@@ -148,35 +148,29 @@ pub fn build_upload_plan(orders: Vec<FrequencyOrder>, start_tstamp: i64) -> Uplo
     let mut out = UploadPlan::new();
 
     let mut work_seq: Sequence = Default::default();
-    let mut last_upload_off_us: i64 = 0;
+    let mut last_upload_off_us: i64 = i64::MIN;
     let mut toff_us: u64 = 0;
 
-    // peekable so we can know we are in the last order to finish the sequence
-    let mut it = orders.iter().peekable();
+    let mut complete_order = |seq, toff_us| {
+        let preempt = estimate_upload_time(&seq);
+        let net_off_us = toff_us as i64 - preempt as i64;
+        // Uploads must be well ordered, this could happen if a sequence is too short (<1 second)
+        assert!(net_off_us > last_upload_off_us);
 
-    while let Some(order) = it.next() {
-        let maybe_done = build_sequence(
-            order,
-            &mut work_seq,
-            it.peek().is_none(),
-            toff_us,
-            start_tstamp,
-        );
+        out.insert(net_off_us, seq);
+        last_upload_off_us = net_off_us;
+    };
+
+    for order in &orders {
+        let maybe_done = build_sequence(order, &mut work_seq, toff_us, start_tstamp);
 
         if let Some(done_seq) = maybe_done {
-            let preempt = estimate_upload_time(&done_seq);
-            let net_off_us = toff_us as i64 - preempt as i64;
-            // Uploads must be well ordered, this could happen if a sequence is too short (<1 second)
-            assert!(net_off_us > last_upload_off_us);
-            // euclid div to prevent negative net_off_us from being too late
-            let net_off_s = net_off_us.div_euclid(1_000_000) as i64;
-            let time = start_tstamp + net_off_s;
-
-            out.insert(time, done_seq);
-            last_upload_off_us = net_off_us;
+            complete_order(done_seq, toff_us);
         }
         toff_us += order.t_us as u64;
     }
+
+    complete_order(work_seq, toff_us);
 
     out
 }

@@ -1,5 +1,5 @@
 use chrono::{self, DateTime, TimeZone, Utc};
-use common::comm_messages::UplinkMsg::{ClearBuffer, PushFracn, PushPLLChange, StartNow, StopNow};
+use common::comm_messages::UplinkMsg::{ClearBuffer, PushFracn, PushPLLChange, StartNow};
 use common::comm_messages::{MAX_UPLINK_MSG_SIZE, UplinkMsg};
 use common::sequence::Sequence;
 use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits};
@@ -107,18 +107,18 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
 }
 
 fn sleep_until_precise(start_date: DateTime<Utc>, until_off_us: i64) {
-        loop {
+    loop {
         let now_exact = Utc::now();
         let offset_us = now_exact
             .signed_duration_since(start_date)
             .num_microseconds()
             .unwrap();
 
-        const BUSY_LOOP_MARGIN_US = 50_000;
+        const BUSY_LOOP_MARGIN_US: i64 = 50_000;
         let remain = until_off_us - offset_us;
 
         if remain <= 0 {
-            // Ready to start 
+            // Ready to start
             break;
         } else if remain > BUSY_LOOP_MARGIN_US {
             std::thread::sleep(Duration::from_micros((remain - BUSY_LOOP_MARGIN_US) as u64));
@@ -185,7 +185,7 @@ fn main() {
 
         let start_date = Utc.timestamp_opt(start_epoch, 0).unwrap();
         let mut ctr = 0;
-        
+
         for (&upload_off_us, seq) in &plan {
             println!("Waiting to upload sequence number {}", ctr);
             sleep_until_precise(start_date, upload_off_us);
