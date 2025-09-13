@@ -122,7 +122,7 @@ fn usart3_rx(rx_buffer: &RXRingBuffer) {
     // We use a buffer instead of directly writing to rx_buffer to prevent excessive locking
     // If we are unable to extract all data from RXFIFO, next interrupt will finish the job!
     let mut buffer: Vec<u8, 16> = Vec::new();
-    let read = with(&COMM_STATE, |state| {
+    with(&COMM_STATE, |state| {
         while state.usart.isr().read().rxfne().bit_is_set() && buffer.len() <= buffer.capacity() {
             let byte = state.usart.rdr().read().rdr().bits();
             buffer.push((byte & 0xFF) as u8).unwrap();
@@ -137,11 +137,7 @@ fn usart3_rx(rx_buffer: &RXRingBuffer) {
 }
 
 fn try_decode_message(buff: &mut [u8]) -> Option<UplinkMsg> {
-    let result = postcard::from_bytes_cobs::<UplinkMsg>(buff);
-    match result {
-        Ok(msg) => Some(msg),
-        Err(err) => None,
-    }
+    postcard::from_bytes_cobs::<UplinkMsg>(buff).ok()
 }
 
 // If a full message is available in the receive ring buffer, it's returned

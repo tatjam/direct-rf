@@ -143,7 +143,7 @@ fn main() -> ! {
     defmt::info!("Sequencer is setup!");
 
     loop {
-        let msg = util::with(comm_state, |state| comm::get_message(state));
+        let msg = util::with(comm_state, comm::get_message);
 
         if let Some(v) = msg {
             handle_msg(v, sequencer_state);

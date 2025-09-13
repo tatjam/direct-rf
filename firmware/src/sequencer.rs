@@ -94,7 +94,7 @@ fn setup_pll(state: &mut SequencerState) {
 fn step(state: &mut SequencerState) {
     assert!(state.is_running);
 
-    state.pllchangei = state.pllchangei + 1;
+    state.pllchangei += 1;
     assert!(state.pllchangei >= 0);
 
     if state.pllchangei as usize == state.seq.pllchange_buffer.len() {

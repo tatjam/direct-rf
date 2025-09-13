@@ -11,9 +11,7 @@ pub struct InterruptAccessible<T>(Mutex<RefCell<MaybeUninit<T>>>);
 
 impl<T> InterruptAccessible<T> {
     pub const fn new() -> Self {
-        Self {
-            0: Mutex::new(RefCell::new(MaybeUninit::uninit())),
-        }
+        Self(Mutex::new(RefCell::new(MaybeUninit::uninit())))
     }
 }
 
@@ -30,7 +28,7 @@ pub fn with<T, F, R>(ia: &InterruptAccessible<T>, f: F) -> R
 where
     F: FnOnce(&mut T) -> R,
 {
-    cortex_m::interrupt::free(|cs| unsafe { f(&mut ia.borrow(cs).borrow_mut().assume_init_mut()) })
+    cortex_m::interrupt::free(|cs| unsafe { f(ia.borrow(cs).borrow_mut().assume_init_mut()) })
 }
 
 #[derive(Clone, Copy)]
@@ -50,7 +48,7 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
     // Reads from buffer to target, up to index "up_to", but not including that byte,
     // starting at ptrs.read, which is included
     fn read_up_to(
-        self: &Self,
+        &self,
         target: &mut [T],
         up_to: usize,
         ptrs: &mut RingBufferPtrs,
@@ -89,7 +87,7 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
     // Returns number of elements read
     // If seek is given, the system will only read up to the given value, including it in the
     // bytes read
-    pub fn read(self: &Self, target: &mut [T], seek: Option<T>) -> usize {
+    pub fn read(&self, target: &mut [T], seek: Option<T>) -> usize {
         let mut ptrs = cortex_m::interrupt::free(|cs| self.read_write_ptrs.borrow(cs).get());
 
         let mut num_read = 0;
@@ -123,7 +121,7 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
     // starting at ptrs.write, which is included. Returns true if we reached the
     // desired end position, false otherwise
     fn write_up_to(
-        self: &Self,
+        &self,
         data: &[T],
         up_to: usize,
         ptrs: &mut RingBufferPtrs,
@@ -153,7 +151,7 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
 
     // Blocking reading very briefly, writes as much data as possible from source slice
     // Returns number of elements written
-    pub fn write(self: &Self, data: &[T]) -> usize {
+    pub fn write(&self, data: &[T]) -> usize {
         let mut ptrs = cortex_m::interrupt::free(|cs| self.read_write_ptrs.borrow(cs).get());
 
         let mut num_written = 0;
@@ -180,9 +178,7 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
 
     pub fn new() -> Self {
         Self {
-            data: SingleThreadUnsafeCell {
-                0: core::cell::UnsafeCell::new([T::default(); L]),
-            },
+            data: SingleThreadUnsafeCell(core::cell::UnsafeCell::new([T::default(); L])),
             read_write_ptrs: Mutex::new(Cell::new(RingBufferPtrs { read: 0, write: 0 })),
         }
     }

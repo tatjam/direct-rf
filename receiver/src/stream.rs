@@ -5,7 +5,6 @@ use chrono::{DateTime, TimeZone, Utc};
 use log::{info, warn};
 use regex::Regex;
 use rustfft::num_complex::Complex;
-use std::collections::HashMap;
 use std::fs::File;
 use std::hint::unreachable_unchecked;
 use std::io::{BufRead, BufReader};

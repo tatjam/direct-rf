@@ -1,10 +1,6 @@
 use crate::dsp::{Dsp, DspSettings};
 use crate::stream::{Scalar, StreamedBaseband, StreamedSamplesFreqs};
-use csv::WriterBuilder;
 use log::info;
-use ndarray_csv::Array2Writer;
-use pico_args;
-use std::fs::File;
 
 mod dsp;
 mod stream;
