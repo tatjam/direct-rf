@@ -88,20 +88,20 @@ fn handle_msg(msg: UplinkMsg, sequencer_state: &InterruptAccessible<SequencerSta
         }
         UplinkMsg::PushPLLChange(ch) => {
             util::with(sequencer_state, |state| {
-                defmt::info!("Pushing PLLChange");
+                defmt::info!("Pushing PLLChange to backbuffer");
                 sequencer::push_pllchange(state, ch);
             });
         }
         UplinkMsg::PushFracn(num, arr) => {
             util::with(sequencer_state, |state| {
-                defmt::info!("Pushing fracn");
+                defmt::info!("Pushing fracn to backbuffer");
                 sequencer::push_fracn(state, &arr[0..(num as usize)]);
                 defmt::info!("Done :)");
             });
         }
-        UplinkMsg::ClearBuffers() => {
+        UplinkMsg::ClearBuffer() => {
             util::with(sequencer_state, |state| {
-                defmt::info!("Cleaning buffers");
+                defmt::info!("Cleaning backbuffer");
                 sequencer::clear_buffers(state);
             });
         }
@@ -117,9 +117,6 @@ fn handle_msg(msg: UplinkMsg, sequencer_state: &InterruptAccessible<SequencerSta
                 sequencer::stop(state);
             });
         }
-        UplinkMsg::SetLooping(_) => {}
-        UplinkMsg::EpochNow(_) => {}
-        UplinkMsg::StartAtEpoch(_) => {}
     }
 }
 

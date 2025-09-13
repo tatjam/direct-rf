@@ -12,8 +12,38 @@ use stm32h7::stm32h7s::{Interrupt, interrupt};
 
 static SEQUENCER_STATE: InterruptAccessible<SequencerState> = InterruptAccessible::new();
 
+pub struct DoubleBuffer<T: Default> {
+    buffers: [T; 2],
+    active_0: bool,
+}
+
+impl<T: Default> DoubleBuffer<T> {
+    fn get_active(&self) -> &T {
+        if self.active_0 {
+            &self.buffers[0]
+        } else {
+            &self.buffers[1]
+        }
+    }
+
+    fn get_back(&mut self) -> &mut T {
+        if self.active_0 {
+            &mut self.buffers[0]
+        } else {
+            &mut self.buffers[1]
+        }
+    }
+
+    fn new() -> Self {
+        Self {
+            buffers: Default::default(),
+            active_0: true,
+        }
+    }
+}
+
 pub struct SequencerState {
-    seq: Sequence,
+    seqs: DoubleBuffer<Sequence>,
     pllchangei: isize,
     tim: stm32h7s::TIM2,
     rcc: stm32h7s::RCC,
@@ -26,7 +56,7 @@ pub struct SequencerState {
 
 fn set_pllchange(state: &mut SequencerState) {
     assert!(state.rcc.cr().read().pll2on().bit_is_clear());
-    let change = &state.seq.pllchange_buffer[state.pllchangei as usize];
+    let change = &state.seqs.get_active().pllchange_buffer[state.pllchangei as usize];
 
     // Output PLL on MCO2, dividing the PLL VCO freq as convenient
     state
@@ -41,7 +71,7 @@ fn set_pllchange(state: &mut SequencerState) {
         .modify(|_, w| unsafe { w.divn2().bits(change.divn).divp().bits(change.divp) });
 
     // Set the fracn initial value
-    let fracn0 = state.seq.fracn_buffer[change.start_tick];
+    let fracn0 = state.seqs.get_active().fracn_buffer[change.start_tick];
     state
         .rcc
         .pllcfgr()
@@ -97,9 +127,10 @@ fn step(state: &mut SequencerState) {
     state.pllchangei += 1;
     assert!(state.pllchangei >= 0);
 
-    if state.pllchangei as usize == state.seq.pllchange_buffer.len() {
-        // We ran out of the buffer, restart
+    if state.pllchangei as usize == state.seqs.get_active().pllchange_buffer.len() {
+        // We ran out of the buffer, swap
         state.pllchangei = 0;
+        state.seqs.active_0 = !state.seqs.active_0;
     }
 
     // Disable TIM
@@ -126,8 +157,7 @@ fn step(state: &mut SequencerState) {
 }
 
 fn set_timer(state: &mut SequencerState) {
-    let change = &state.seq.pllchange_buffer[state.pllchangei as usize];
-
+    let change = &state.seqs.get_active().pllchange_buffer[state.pllchangei as usize];
     state.tim.cnt().modify(|_, w| w.set(change.tim_us));
     state.tim.arr().modify(|_, w| w.set(change.tim_us));
 
@@ -149,8 +179,8 @@ pub fn launch(state: &mut SequencerState) {
 
 pub fn clear_buffers(state: &mut SequencerState) {
     stop(state);
-    state.seq.fracn_buffer.clear();
-    state.seq.pllchange_buffer.clear();
+    state.seqs.get_back().fracn_buffer.clear();
+    state.seqs.get_back().pllchange_buffer.clear();
 }
 
 pub fn stop(state: &mut SequencerState) {
@@ -164,15 +194,16 @@ pub fn stop(state: &mut SequencerState) {
 }
 
 pub fn push_fracn(state: &mut SequencerState, fracn: &[u16]) {
-    defmt::info!("{}", state.seq.fracn_buffer.len());
+    defmt::info!("{}", state.seqs.get_back().fracn_buffer.len());
     for fracnv in fracn {
-        state.seq.fracn_buffer.push(*fracnv).unwrap();
+        state.seqs.get_back().fracn_buffer.push(*fracnv).unwrap();
     }
 }
 
 pub fn push_pllchange(state: &mut SequencerState, change: PLLChange) {
     state
-        .seq
+        .seqs
+        .get_back()
         .pllchange_buffer
         .push(change)
         .unwrap_or_else(|_| panic!());
@@ -211,10 +242,7 @@ pub fn setup(
         SEQUENCER_STATE
             .borrow(cs)
             .replace(MaybeUninit::new(SequencerState {
-                seq: Sequence {
-                    fracn_buffer: Vec::new(),
-                    pllchange_buffer: Vec::new(),
-                },
+                seqs: DoubleBuffer::new(),
                 pllchangei: 0,
                 rcc,
                 tim,
@@ -247,7 +275,7 @@ fn TIM2() {
                 state.fracn_i += 1;
 
                 // change fracn
-                let fracn = state.seq.fracn_buffer[state.fracn_i];
+                let fracn = state.seqs.get_active().fracn_buffer[state.fracn_i];
 
                 state
                     .rcc

@@ -1,10 +1,8 @@
 use chrono::{self, Utc};
-use common::comm_messages::UplinkMsg::{ClearBuffers, PushFracn, PushPLLChange, StartNow, StopNow};
+use common::comm_messages::UplinkMsg::{ClearBuffer, PushFracn, PushPLLChange, StartNow, StopNow};
 use common::comm_messages::{MAX_UPLINK_MSG_SIZE, UplinkMsg};
 use common::sequence::Sequence;
-use serialport::{
-    ClearBuffer, DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits,
-};
+use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits};
 use std::fmt::Write;
 use std::fs;
 use std::io::{ErrorKind, Read};
@@ -76,7 +74,7 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
 
     const RETRIES: usize = 4;
 
-    port.clear(ClearBuffer::Input).unwrap();
+    port.clear(serialport::ClearBuffer::Input).unwrap();
 
     let mut numtry = 0;
 
@@ -168,7 +166,7 @@ fn main() {
 
         // Send the sequence
         send(&mut port, &StopNow()).unwrap();
-        send(&mut port, &ClearBuffers()).unwrap();
+        send(&mut port, &ClearBuffer()).unwrap();
         send_seq(&mut port, seq).unwrap();
 
         println!("Waiting to start sequence");

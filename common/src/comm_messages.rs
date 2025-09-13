@@ -11,10 +11,7 @@ pub enum UplinkMsg {
     Ping(),
     PushPLLChange(PLLChange),
     PushFracn(u8, [u16; 32]),
-    ClearBuffers(),
+    ClearBuffer(),
     StartNow(),
     StopNow(),
-    SetLooping(bool),
-    EpochNow(i64),
-    StartAtEpoch(i64),
 }

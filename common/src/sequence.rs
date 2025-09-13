@@ -15,6 +15,7 @@ pub struct PLLChange {
     pub tim_us: u32,
 }
 
+#[derive(Default)]
 pub struct Sequence {
     pub fracn_buffer: Vec<u16, MAX_SEQUENCE_LEN>,
     pub pllchange_buffer: Vec<PLLChange, MAX_DIVN_CHANGES>,
