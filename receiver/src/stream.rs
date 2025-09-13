@@ -80,7 +80,7 @@ impl StreamedBaseband {
 
     // If we run out of data, the vector will not be overwritten!
     // We return number of samples read
-    pub fn read_into(self: &mut Self, mut buf: &mut [Sample]) -> usize {
+    pub fn read_into(&mut self, buf: &mut [Sample]) -> usize {
         let mut num_samples_read = 0;
         while let Some(Ok(samps)) = self.wav.next() {
             if num_samples_read == buf.len() {
@@ -107,7 +107,7 @@ impl StreamedBaseband {
     // recording starts exactly at start date. Remember to use some margin, as the actual
     // start of recording may be anytime during the second
     // TODO: This will change if SDR++ gets improved date merged
-    pub fn seek_epoch(self: &mut Self, epoch: f64) {
+    pub fn seek_epoch(&mut self, epoch: f64) {
         let start_epoch = self.start_date.timestamp() as f64
             + (self.start_date.timestamp_subsec_nanos() as f64) * 1e-9;
         let delta = epoch - start_epoch;
@@ -128,11 +128,11 @@ impl StreamedBaseband {
         info!("Done");
     }
 
-    pub fn get_sample_rate(self: &Self) -> u32 {
+    pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    pub fn get_center_freq(self: &Self) -> f64 {
+    pub fn get_center_freq(&self) -> f64 {
         self.center_freq
     }
 }
@@ -182,20 +182,16 @@ impl StreamedSamplesFreqs {
     }
 
     // Returns current, and next freq change for given time
-    fn find_freq_change_for(self: &Self, t: f64) -> Option<(FreqChange, FreqChange)> {
-        match self
-            .freqs
+    fn find_freq_change_for(&self, t: f64) -> Option<(FreqChange, FreqChange)> {
+        self.freqs
             .windows(2)
             .find(|pair| pair[0].t <= t && pair[1].t > t)
-        {
-            None => None,
-            Some(v) => Some((v[0], v[1])),
-        }
+            .map(|v| (v[0], v[1]))
     }
 
     // If we run out of data, the vector will be zero-padded
     // We return number of samples read alongside them.
-    pub fn get_next(self: &mut Self, num_samples: usize) -> (Array1<Sample>, usize) {
+    pub fn get_next(&mut self, num_samples: usize) -> (Array1<Sample>, usize) {
         let mut out = Array1::zeros(num_samples);
 
         let mut num_written = 0;
@@ -260,11 +256,11 @@ impl StreamedSamplesFreqs {
         }
     }
 
-    pub fn get_first_epoch(self: &Self) -> f64 {
-        return self.freqs[0].t;
+    pub fn get_first_epoch(&self) -> f64 {
+        self.freqs[0].t
     }
 
-    pub fn dump_to_wav(self: &mut Self, path: String) {
+    pub fn dump_to_wav(&mut self, path: String) {
         let header = WavHeader {
             sample_format: SampleFormat::Float,
             channels: Channels::new().front_left().front_right(),

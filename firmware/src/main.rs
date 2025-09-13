@@ -14,7 +14,6 @@ use defmt::export::panic;
 use defmt_rtt as _;
 use panic_probe as _;
 use stm32h7::stm32h7s;
-use stm32h7::stm32h7s::Interrupt;
 
 // Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
 fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {

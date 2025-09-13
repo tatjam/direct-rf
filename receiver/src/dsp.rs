@@ -64,15 +64,12 @@ impl ReferenceSpectrogram {
     }
 
     fn get_line_ref(&mut self, bin: usize) -> &mut ReferenceSpectrogramLine {
-        let entry = self
-            .lines
+        self.lines
             .entry(bin)
             .or_insert_with(|| ReferenceSpectrogramLine {
                 num_entries: 0,
                 data: Array1::zeros(self.cols),
-            });
-
-        entry
+            })
     }
 
     // Searches the line with the most entries, gets it and removes it
@@ -284,7 +281,7 @@ impl Dsp {
         self.build_spectrogram();
         self.dump_spectrogram();
 
-        let delay = self.correlate_spectrogram();
+        let _delay = self.correlate_spectrogram();
 
         self.first_run = false;
     }
@@ -360,7 +357,7 @@ impl Dsp {
         // The rest is loaded from the overlap data
         if nsamp != self.settings.window_size {
             as_slice[0..self.settings.window_size - nsamp]
-                .copy_from_slice(&self.overlap_data.as_slice().unwrap());
+                .copy_from_slice(self.overlap_data.as_slice().unwrap());
         }
 
         // The next overlap data is copied over from the new slice
@@ -435,7 +432,7 @@ impl Dsp {
                 .unwrap();
 
             // Multiply together (convolve in time domain)
-            azip!((a in &mut fft_a, &b in &fft_b) *a = *a * b);
+            azip!((a in &mut fft_a, &b in &fft_b) *a *= b);
 
             // Return to time domain
         }
