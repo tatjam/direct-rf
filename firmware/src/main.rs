@@ -146,9 +146,7 @@ fn main() -> ! {
         if let Some(v) = msg {
             handle_msg(v, sequencer_state);
         } else {
-            for i in 0..1000000 {
-                black_box(i);
-            }
+            // Busy loop
         }
     }
 }

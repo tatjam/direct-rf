@@ -100,7 +100,6 @@ impl<T: Default + Copy + Eq, const L: usize> RingBuffer<T, L> {
         if ptrs.write < ptrs.read {
             // We need to read to end of buffer, and then up to write ptr
             if self.read_up_to(target, L, &mut ptrs, &mut num_read, seek) {
-                defmt::info!("WRAPRAROUND");
                 // We wrapped around
                 ptrs.read = 0;
                 self.read_up_to(target, ptrs.write, &mut ptrs, &mut num_read, seek);

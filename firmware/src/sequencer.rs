@@ -131,7 +131,15 @@ fn step(state: &mut SequencerState) {
     if state.pllchangei as usize == state.seqs.get_active().pllchange_buffer.len() {
         // Swap the buffer right now, if it's still being uploaded we panic!
         assert!(!state.uploading);
+        defmt::info!("Swap buffer");
         state.seqs.active_0 = !state.seqs.active_0;
+        state.pllchangei = 0;
+        clear_buffers(state);
+        if state.seqs.get_active().pllchange_buffer.len() == 0 {
+            defmt::warn!("Stopping sequence, swapped buffer empty");
+            stop(state);
+            return;
+        }
     }
 
     // Disable TIM

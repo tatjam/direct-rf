@@ -1,5 +1,7 @@
 use chrono::{self, DateTime, TimeZone, Utc};
-use common::comm_messages::UplinkMsg::{ClearBuffer, PushFracn, PushPLLChange, StartNow};
+use common::comm_messages::UplinkMsg::{
+    ClearBuffer, Ping, PushFracn, PushPLLChange, StartNow, StopNow, UploadDone,
+};
 use common::comm_messages::{MAX_UPLINK_MSG_SIZE, UplinkMsg};
 use common::sequence::Sequence;
 use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits};
@@ -62,6 +64,18 @@ fn send_seq(port: &mut Box<dyn SerialPort>, seq: &Sequence) -> Result<(), &'stat
     Ok(())
 }
 
+fn uplink_to_str(msg: &UplinkMsg) -> &str {
+    match msg {
+        Ping() => return "Ping",
+        PushPLLChange(_) => return "PLLChange",
+        PushFracn(_, _) => return "PushFracn",
+        UploadDone() => return "UploadDone",
+        ClearBuffer() => return "ClearBuffer",
+        StartNow() => return "StartNow",
+        StopNow() => return "StopNow",
+    }
+}
+
 // Tries to send data, waiting for acknowledge and retrying
 fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static str> {
     let mut databuf: [u8; MAX_UPLINK_MSG_SIZE] = [0; MAX_UPLINK_MSG_SIZE];
@@ -81,7 +95,11 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
     while numtry < RETRIES {
         port.write_all(data).unwrap();
         port.flush().unwrap();
-        println!("Sent try {}, waiting for reply...", numtry + 1);
+        println!(
+            "Sent {} try {}, waiting for reply...",
+            uplink_to_str(msg),
+            numtry + 1
+        );
 
         let mut read_buffer: [u8; 1] = [0];
         let try_read = port.read(&mut read_buffer);
@@ -98,6 +116,7 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
             println!("NoAck received, trying again!");
             // no ack, try again...
         } else {
+            println!("Ok!");
             return Ok(());
         }
         numtry += 1;
@@ -175,7 +194,7 @@ fn main() {
     if !dry {
         let port_name = find_port().unwrap();
         let mut port = serialport::new(port_name, 115_200)
-            .timeout(Duration::from_secs_f64(0.5))
+            .timeout(Duration::from_secs_f64(1.0))
             .flow_control(FlowControl::None)
             .parity(Parity::None)
             .stop_bits(StopBits::One)
@@ -190,12 +209,14 @@ fn main() {
             println!("Waiting to upload sequence number {}", ctr);
             sleep_until_precise(start_date, upload_off_us);
 
-            send(&mut port, &ClearBuffer());
-            send_seq(&mut port, seq);
+            println!("Sending sequence {}", ctr);
+            send(&mut port, &ClearBuffer()).unwrap();
+            send_seq(&mut port, seq).unwrap();
+            send(&mut port, &UploadDone()).unwrap();
             if ctr == 0 {
                 println!("Waiting to start first sequence");
                 sleep_until_precise(start_date, 0);
-                send(&mut port, &StartNow());
+                send(&mut port, &StartNow()).unwrap();
             }
             ctr += 1;
         }
