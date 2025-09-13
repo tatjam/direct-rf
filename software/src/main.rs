@@ -1,4 +1,4 @@
-use chrono::{self, Utc};
+use chrono::{self, DateTime, TimeZone, Utc};
 use common::comm_messages::UplinkMsg::{ClearBuffer, PushFracn, PushPLLChange, StartNow, StopNow};
 use common::comm_messages::{MAX_UPLINK_MSG_SIZE, UplinkMsg};
 use common::sequence::Sequence;
@@ -46,7 +46,7 @@ fn frequencies_to_str(freqs: &Vec<(f64, f64)>) -> String {
     out
 }
 
-fn send_seq(port: &mut Box<dyn SerialPort>, seq: Sequence) -> Result<(), &'static str> {
+fn send_seq(port: &mut Box<dyn SerialPort>, seq: &Sequence) -> Result<(), &'static str> {
     for slice in seq.fracn_buffer.chunks(32) {
         let mut fixedslice: [u16; 32] = [0; 32];
         // The rest of elements may be left zeroed, as we pass the len separately
@@ -55,8 +55,8 @@ fn send_seq(port: &mut Box<dyn SerialPort>, seq: Sequence) -> Result<(), &'stati
         send(port, &cmd).unwrap();
     }
 
-    for pll in seq.pllchange_buffer {
-        send(port, &PushPLLChange(pll)).unwrap();
+    for pll in &seq.pllchange_buffer {
+        send(port, &PushPLLChange(*pll)).unwrap();
     }
 
     Ok(())
@@ -106,6 +106,28 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
     Err("Too many tries without reply")
 }
 
+fn sleep_until_precise(start_date: DateTime<Utc>, until_off_us: i64) {
+        loop {
+        let now_exact = Utc::now();
+        let offset_us = now_exact
+            .signed_duration_since(start_date)
+            .num_microseconds()
+            .unwrap();
+
+        const BUSY_LOOP_MARGIN_US = 50_000;
+        let remain = until_off_us - offset_us;
+
+        if remain <= 0 {
+            // Ready to start 
+            break;
+        } else if remain > BUSY_LOOP_MARGIN_US {
+            std::thread::sleep(Duration::from_micros((remain - BUSY_LOOP_MARGIN_US) as u64));
+        } else {
+            // Busy loop
+        }
+    }
+}
+
 fn main() {
     let mut pargs = pico_args::Arguments::from_env();
 
@@ -143,13 +165,10 @@ fn main() {
     );
 
     // Note that this seeding is good enough as rand does some "entropy increasing" on the seed
-    let seq = sequence::build_sequence(orders, start_epoch as u64).unwrap();
-    println!(
-        "Built sequence with {} pll changes and {} fracn values",
-        seq.pllchange_buffer.len(),
-        seq.fracn_buffer.len()
-    );
-    let freqs = sequence::build_frequencies(&seq, start_epoch);
+    let plan = sequence::build_upload_plan(orders, start_epoch);
+    println!("Built upload plan with {} uploads", plan.len(),);
+
+    let freqs = sequence::build_frequencies(&plan, start_epoch);
     fs::write(&out_path, frequencies_to_str(&freqs)).unwrap();
     println!("Written frequencies to file {}", out_path);
 
@@ -164,18 +183,23 @@ fn main() {
             .open()
             .expect("Failed to open STM32 port");
 
-        // Send the sequence
-        send(&mut port, &StopNow()).unwrap();
-        send(&mut port, &ClearBuffer()).unwrap();
-        send_seq(&mut port, seq).unwrap();
+        let start_date = Utc.timestamp_opt(start_epoch, 0).unwrap();
+        let mut ctr = 0;
+        
+        for (&upload_off_us, seq) in &plan {
+            println!("Waiting to upload sequence number {}", ctr);
+            sleep_until_precise(start_date, upload_off_us);
 
-        println!("Waiting to start sequence");
-        // Trigger the start at a relatively precise time
-        while Utc::now().timestamp() < start_epoch {
-            std::thread::sleep(Duration::from_millis(100));
+            send(&mut port, &ClearBuffer());
+            send_seq(&mut port, seq);
+            if ctr == 0 {
+                println!("Waiting to start first sequence");
+                sleep_until_precise(start_date, 0);
+                send(&mut port, &StartNow());
+            }
+            ctr += 1;
         }
 
-        send(&mut port, &StartNow()).unwrap();
-        println!("Sequence started");
+        println!("Sequence finished");
     }
 }

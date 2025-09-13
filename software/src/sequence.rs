@@ -7,7 +7,7 @@ use rand_chacha::ChaCha20Rng;
 
 const FREF_HZ: f64 = 12_000_000.0;
 
-// Maps UNIX timestamps to the sequence that must be uploaded at that moment
+/// Maps UNIX timestamps to the sequence that must be uploaded at that moment
 type UploadPlan = BTreeMap<i64, Sequence>;
 
 pub struct SubSequence {
@@ -185,28 +185,30 @@ pub fn find_start_epoch(date: chrono::DateTime<chrono::Utc>) -> i64 {
     // We add a bit of margin, to prevent the hypothetical case of starting a few milliseconds
     // before the next epoch and not having enough time to send the stuff to the transmitter
 
-    const TIME_SEED_ROUND_S: i64 = 60;
+    const TIME_SEED_ROUND_S: i64 = 10;
     const MARGIN_S: i64 = 1;
     ((date.timestamp() + MARGIN_S) / TIME_SEED_ROUND_S) * TIME_SEED_ROUND_S + TIME_SEED_ROUND_S
 }
 
 // Returns unix epoch (in f64 seconds) - frequency pairs (in Hz)
 // This function has some fine-tuning parameters to match the timing of the actual transmitter!
-pub fn build_frequencies(seq: &Sequence, start_timestamp: i64) -> Vec<(f64, f64)> {
+pub fn build_frequencies(plan: &UploadPlan, start_timestamp: i64) -> Vec<(f64, f64)> {
     const PLLCHANGE_S: f64 = 5e-6;
 
     let mut out = Vec::new();
     let mut t = start_timestamp as f64;
 
-    for change in seq.pllchange_buffer.iter() {
-        t += PLLCHANGE_S;
-        for i in 0..change.for_ticks {
-            let fracn = seq.fracn_buffer[change.start_tick + i] as f64;
-            let divn = change.divn as f64;
-            let divp = change.divp as f64;
-            let freq = FREF_HZ * (divn + 1.0 + fracn / 8192.0) / (divp + 1.0);
-            out.push((t, freq));
-            t += change.tim_us as f64 * 1e-6;
+    for (_, seq) in plan {
+        for change in seq.pllchange_buffer.iter() {
+            t += PLLCHANGE_S;
+            for i in 0..change.for_ticks {
+                let fracn = seq.fracn_buffer[change.start_tick + i] as f64;
+                let divn = change.divn as f64;
+                let divp = change.divp as f64;
+                let freq = FREF_HZ * (divn + 1.0 + fracn / 8192.0) / (divp + 1.0);
+                out.push((t, freq));
+                t += change.tim_us as f64 * 1e-6;
+            }
         }
     }
 
