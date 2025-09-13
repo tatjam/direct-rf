@@ -1,16 +1,21 @@
+use std::{collections::BTreeMap, ops::Div};
+
 use crate::orders::FrequencyOrder;
-use common::sequence::{PLLChange, Sequence};
+use common::sequence::{MAX_DIVN_CHANGES, MAX_SEQUENCE_LEN, PLLChange, Sequence};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 const FREF_HZ: f64 = 12_000_000.0;
+
+// Maps UNIX timestamps to the sequence that must be uploaded at that moment
+type UploadPlan = BTreeMap<i64, Sequence>;
 
 pub struct SubSequence {
     change: PLLChange,
     fracn: Vec<u16>,
 }
 
-pub fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence, &'static str> {
+pub fn build_subsequence(order: &FrequencyOrder, seed: u64) -> Result<SubSequence, &'static str> {
     let mut fracn_buf = Vec::with_capacity(order.n);
 
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
@@ -96,25 +101,84 @@ pub fn build_subsequence(order: FrequencyOrder, seed: u64) -> Result<SubSequence
     })
 }
 
-pub fn build_sequence(orders: Vec<FrequencyOrder>, seed: u64) -> Result<Sequence, &'static str> {
-    let mut out = Sequence {
-        fracn_buffer: heapless::Vec::new(),
-        pllchange_buffer: heapless::Vec::new(),
-    };
+// Appends the sequence to the given one, or creates a new one if it doesn't fit and
+// returns the final sequence to be stored in the upload map
+pub fn build_sequence(
+    order: &FrequencyOrder,
+    base: &mut Sequence,
+    is_last: bool,
+    toff_us: u64,
+    t_start: i64,
+) -> Option<Sequence> {
+    let mut out = None;
 
-    for order in orders {
-        let mut subseq = build_subsequence(order, seed)?;
-        // Offset PLLChange index!
-        subseq.change.start_tick += out.fracn_buffer.len();
-        out.pllchange_buffer
-            .push(subseq.change)
-            .unwrap_or_else(|_| panic!());
-        for fracni in subseq.fracn {
-            out.fracn_buffer.push(fracni).unwrap();
-        }
+    // TODO: seed
+    let seed = 0;
+
+    let mut subseq = build_subsequence(order, seed).unwrap();
+    if base.fracn_buffer.len() + subseq.fracn.len() > MAX_SEQUENCE_LEN
+        || base.pllchange_buffer.len() + 1 > MAX_DIVN_CHANGES
+        || is_last
+    {
+        // We ran out of space in the base seq, create a new one
+        out = Some(base.expensive_copy());
+        *base = Default::default();
     }
 
-    Ok(out)
+    // Offset PLLChange index!
+    subseq.change.start_tick += base.fracn_buffer.len();
+    base.pllchange_buffer
+        .push(subseq.change)
+        .unwrap_or_else(|_| panic!());
+
+    for fracni in subseq.fracn {
+        base.fracn_buffer.push(fracni).unwrap();
+    }
+
+    out
+}
+
+// Returns upload time estimate in us
+pub fn estimate_upload_time(_seq: &Sequence) -> u64 {
+    1_000_000
+}
+
+// start_tstamp is the (approximate) time the sequence will start
+pub fn build_upload_plan(orders: Vec<FrequencyOrder>, start_tstamp: i64) -> UploadPlan {
+    let mut out = UploadPlan::new();
+
+    let mut work_seq: Sequence = Default::default();
+    let mut last_upload_off_us: i64 = 0;
+    let mut toff_us: u64 = 0;
+
+    // peekable so we can know we are in the last order to finish the sequence
+    let mut it = orders.iter().peekable();
+
+    while let Some(order) = it.next() {
+        let maybe_done = build_sequence(
+            order,
+            &mut work_seq,
+            it.peek().is_none(),
+            toff_us,
+            start_tstamp,
+        );
+
+        if let Some(done_seq) = maybe_done {
+            let preempt = estimate_upload_time(&done_seq);
+            let net_off_us = toff_us as i64 - preempt as i64;
+            // Uploads must be well ordered, this could happen if a sequence is too short (<1 second)
+            assert!(net_off_us > last_upload_off_us);
+            // euclid div to prevent negative net_off_us from being too late
+            let net_off_s = net_off_us.div_euclid(1_000_000) as i64;
+            let time = start_tstamp + net_off_s;
+
+            out.insert(time, done_seq);
+            last_upload_off_us = net_off_us;
+        }
+        toff_us += order.t_us as u64;
+    }
+
+    out
 }
 
 pub fn find_start_epoch(date: chrono::DateTime<chrono::Utc>) -> i64 {

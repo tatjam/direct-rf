@@ -11,6 +11,7 @@ pub enum UplinkMsg {
     Ping(),
     PushPLLChange(PLLChange),
     PushFracn(u8, [u16; 32]),
+    UploadDone(),
     ClearBuffer(),
     StartNow(),
     StopNow(),

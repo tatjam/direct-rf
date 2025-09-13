@@ -52,6 +52,8 @@ pub struct SequencerState {
     fracn_i: usize,
 
     is_running: bool,
+
+    uploading: bool,
 }
 
 fn set_pllchange(state: &mut SequencerState) {
@@ -128,8 +130,8 @@ fn step(state: &mut SequencerState) {
     assert!(state.pllchangei >= 0);
 
     if state.pllchangei as usize == state.seqs.get_active().pllchange_buffer.len() {
-        // We ran out of the buffer, swap
-        state.pllchangei = 0;
+        // Swap the buffer right now, if it's still being uploaded we panic!
+        assert!(!state.uploading);
         state.seqs.active_0 = !state.seqs.active_0;
     }
 
@@ -194,13 +196,19 @@ pub fn stop(state: &mut SequencerState) {
 }
 
 pub fn push_fracn(state: &mut SequencerState, fracn: &[u16]) {
-    defmt::info!("{}", state.seqs.get_back().fracn_buffer.len());
+    state.uploading = true;
     for fracnv in fracn {
         state.seqs.get_back().fracn_buffer.push(*fracnv).unwrap();
     }
 }
 
+pub fn notify_upload_done(state: &mut SequencerState) {
+    state.uploading = false;
+}
+
 pub fn push_pllchange(state: &mut SequencerState, change: PLLChange) {
+    state.uploading = true;
+
     state
         .seqs
         .get_back()
