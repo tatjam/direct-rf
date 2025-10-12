@@ -1,4 +1,4 @@
-use chrono::{self, DateTime, TimeZone, Utc};
+use chrono::{self, DateTime, SubsecRound, TimeZone, Utc};
 use common::comm_messages::UplinkMsg::{
     ClearBuffer, Ping, PushFracn, PushPLLChange, StartNow, StopNow, UploadDone,
 };
@@ -93,6 +93,7 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
     let mut numtry = 0;
 
     while numtry < RETRIES {
+        let send_moment = Utc::now();
         port.write_all(data).unwrap();
         port.flush().unwrap();
         /*println!(
@@ -117,6 +118,12 @@ fn send(port: &mut Box<dyn SerialPort>, msg: &UplinkMsg) -> Result<(), &'static 
             // no ack, try again...
         } else {
             //println!("Ok!");
+            let ok_moment = Utc::now();
+            let delta = ok_moment.signed_duration_since(send_moment);
+            println!(
+                "From send to ack took {}us",
+                delta.num_microseconds().unwrap()
+            );
             return Ok(());
         }
         numtry += 1;

@@ -72,6 +72,7 @@ pub fn build_subsequence(order: &FrequencyOrder, seed: u64) -> Result<SubSequenc
         // fac is uniformly distributed on [-0.5, 0.5), and represents
         // our desired position in the bandwidth
         let fac = rng.random::<f64>() - 0.5;
+
         let freq = order.freq_hz as f64 + fac * (order.bandwidth_hz as f64);
         // Actual fout = fref * (divn + 1 + fracn/2^13) / divp, so we find
         let fracnf = 8192.0 * (divpf * freq - FREF_HZ - divnf * FREF_HZ) / FREF_HZ;

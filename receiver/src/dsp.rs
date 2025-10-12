@@ -1,10 +1,11 @@
-use crate::stream::{FreqOnTimes, Sample, Scalar, StreamedBaseband, StreamedSamplesFreqs};
+use crate::stream::{FreqOnTimes, Sample, Scalar, StreamedSamplesFreqs};
+use anyhow::{Result, anyhow};
 use csv::WriterBuilder;
 use ndarray::{Array1, Array2, ArrayViewMut1, azip, s};
 use ndarray_csv::Array2Writer;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
+use rustfft::num_complex::Complex;
 use rustfft::num_complex::ComplexFloat;
-use rustfft::num_traits::Zero;
 use rustfft::{Fft, FftPlanner};
 use std::collections::HashMap;
 use std::fs::File;
@@ -180,7 +181,7 @@ impl ReferenceSpectrogram {
 //    correlation maximum by sliding slightly (not using FFT, just manual convolution)
 //  - Apply the correction afterwards
 pub struct Dsp {
-    baseband: StreamedBaseband,
+    baseband: sdriq::Source<File>,
     freqs: StreamedSamplesFreqs,
     settings: DspSettings,
 
@@ -202,7 +203,7 @@ pub struct Dsp {
 
 impl Dsp {
     pub fn new(
-        baseband: StreamedBaseband,
+        baseband: sdriq::Source<File>,
         freqs: StreamedSamplesFreqs,
         settings: DspSettings,
     ) -> Self {
@@ -232,7 +233,7 @@ impl Dsp {
         let correlate_fft = real_planner.plan_fft_forward(settings.spectrogram_size_search);
         let correlate_ifft = real_planner.plan_fft_inverse(settings.spectrogram_size_search);
         let mut correlate_fft_scratch = Vec::new();
-        correlate_fft_scratch.resize(correlate_fft.get_scratch_len(), Sample::zero());
+        correlate_fft_scratch.resize(correlate_fft.get_scratch_len(), Complex::new(0.0, 0.0));
 
         assert_eq!(
             correlate_fft_scratch.len(),
@@ -257,7 +258,7 @@ impl Dsp {
         }
     }
 
-    pub fn first_run(&mut self) {
+    pub fn first_run(&mut self) -> Result<()> {
         self.baseband.seek_epoch(self.freqs.get_first_epoch() - 1.5);
         self.spectrogram.sample0_epoch = self.freqs.get_first_epoch() - 1.5;
 
@@ -274,7 +275,7 @@ impl Dsp {
 
         let nread = self
             .baseband
-            .read_into(self.spectrogram_buffer.as_mut_slice());
+            .get_samples(self.spectrogram_buffer.as_mut_slice())?;
 
         debug_assert_eq!(nread, nsamples);
 
@@ -284,6 +285,8 @@ impl Dsp {
         let _delay = self.correlate_spectrogram();
 
         self.first_run = false;
+
+        Ok(())
     }
 
     fn build_spectrogram(&mut self) {
@@ -321,10 +324,11 @@ impl Dsp {
         }
     }
 
-    fn dump_spectrogram(&self) {
-        let file = File::create("dump.csv").unwrap();
+    fn dump_spectrogram(&self) -> Result<()> {
+        let file = File::create("dump.csv")?;
         let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
         writer.serialize_array2(&self.spectrogram.data).unwrap();
+        Ok(())
     }
 
     // Reads a full window from buffer into window_buffer, using overlap_data
@@ -372,17 +376,17 @@ impl Dsp {
     // Returns how many samples the spectrogram has to be delayed to match the reference
     fn correlate_spectrogram(&mut self) -> usize {
         let start_offset =
-            self.spectrogram.start_sample as f64 / self.baseband.get_sample_rate() as f64;
+            self.spectrogram.start_sample as f64 / self.baseband.get_header().samp_rate as f64;
         let start_t = self.spectrogram.sample0_epoch + start_offset;
         let end_offset =
-            self.spectrogram.data.ncols() as f64 / self.baseband.get_sample_rate() as f64;
+            self.spectrogram.data.ncols() as f64 / self.baseband.get_header().samp_rate as f64;
         let freqs = self
             .freqs
             .get_frequencies_for_interval(start_t, start_t + end_offset);
 
         let mut ref_spectrogram = ReferenceSpectrogram::new(
             self.settings.window_size as f64,
-            self.baseband.get_sample_rate() as f64,
+            self.baseband.get_header().samp_rate as f64,
             self.settings.spectrogram_size_search,
         );
 
