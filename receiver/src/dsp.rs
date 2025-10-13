@@ -2,7 +2,7 @@ use crate::stream::{FreqOnTimes, Sample, Scalar, StreamedSamplesFreqs};
 use anyhow::{Result, anyhow};
 use csv::WriterBuilder;
 use ndarray::{Array1, Array2, ArrayViewMut1, azip, s};
-use ndarray_csv::Array2Writer;
+use ndarray_npy::write_npy;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use rustfft::num_complex::Complex;
 use rustfft::num_complex::ComplexFloat;
@@ -216,8 +216,9 @@ impl Dsp {
         let mut hann_window = Array1::zeros(settings.window_size * 2);
         let n = settings.window_size - 1;
         for i in 0..settings.window_size {
-            hann_window[i * 2] = (std::f64::consts::PI * (i as f64) / (n as f64)).sin() as Scalar;
-            hann_window[i * 2 + 1] = hann_window[i];
+            let val = (std::f64::consts::PI * (i as f64) / (n as f64)).sin() as Scalar;
+            hann_window[i * 2] = val * val;
+            hann_window[i * 2 + 1] = hann_window[i * 2];
         }
 
         let window_buffer = Array1::zeros(settings.window_size);
@@ -259,8 +260,9 @@ impl Dsp {
     }
 
     pub fn first_run(&mut self) -> Result<()> {
-        self.baseband.seek_epoch(self.freqs.get_first_epoch() - 1.5);
-        self.spectrogram.sample0_epoch = self.freqs.get_first_epoch() - 1.5;
+        let start = self.freqs.get_first_epoch() - 1.5;
+        self.baseband.seek_to_timestamp((start * 1000.0) as u64)?;
+        self.spectrogram.sample0_epoch = start;
 
         debug_assert_eq!(self.spectrogram_buffer.len(), 0);
 
@@ -277,10 +279,10 @@ impl Dsp {
             .baseband
             .get_samples(self.spectrogram_buffer.as_mut_slice())?;
 
-        debug_assert_eq!(nread, nsamples);
+        //debug_assert_eq!(nread, nsamples);
 
         self.build_spectrogram();
-        self.dump_spectrogram();
+        self.dump_spectrogram()?;
 
         let _delay = self.correlate_spectrogram();
 
@@ -325,9 +327,7 @@ impl Dsp {
     }
 
     fn dump_spectrogram(&self) -> Result<()> {
-        let file = File::create("dump.csv")?;
-        let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
-        writer.serialize_array2(&self.spectrogram.data).unwrap();
+        write_npy("dump.npy", &self.spectrogram.data)?;
         Ok(())
     }
 

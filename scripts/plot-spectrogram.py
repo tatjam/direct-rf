@@ -1,14 +1,15 @@
+#!/usr/bin/env python3
 import numpy as np
 import matplotlib.pyplot as plt
 import sys
-import pandas as pd
 
-def plot_csv_as_bitmap(csv_file):
+def plot_csv_as_bitmap(file):
     """
-    Plot a CSV file as a bitmap/heatmap
+    Plot a npy file as a bitmap/heatmap, with FFT frequency shifting
     """
-    data = pd.read_csv(csv_file, header=None)
-    array_2d = np.log10(data.values)
+    data = np.load(file)
+    array_2d = np.fft.fftshift(data, axes=0)
+    array_2d = 20 * np.log10(array_2d)
     
     plt.figure(figsize=(10, 8))
     

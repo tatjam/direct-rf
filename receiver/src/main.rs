@@ -1,6 +1,9 @@
+use std::fs::File;
+
 use crate::dsp::{Dsp, DspSettings};
-use crate::stream::{Scalar, StreamedBaseband, StreamedSamplesFreqs};
+use crate::stream::{Scalar, StreamedSamplesFreqs};
 use log::info;
+use sdriq::Source;
 
 mod dsp;
 mod stream;
@@ -11,7 +14,8 @@ fn main() {
 
     let baseband_path: String = pargs.free_from_str().unwrap();
     info!("Loading baseband for {}", baseband_path);
-    let baseband = StreamedBaseband::new(baseband_path);
+    let baseband_file = File::open(baseband_path).unwrap();
+    let baseband = Source::new(baseband_file).unwrap();
 
     let freqs_path: String = pargs
         .opt_value_from_str(["-f", "--freqs"])
@@ -20,8 +24,8 @@ fn main() {
     info!("Loading transmitted frequencies from {}", freqs_path);
     let freqs = StreamedSamplesFreqs::new(
         freqs_path,
-        baseband.get_center_freq(),
-        baseband.get_sample_rate(),
+        baseband.get_header().center_freq as f64,
+        baseband.get_header().samp_rate,
     );
 
     let min_psr: f64 = pargs
@@ -36,14 +40,14 @@ fn main() {
 
     let dsp_settings = DspSettings {
         window_size: 512,
-        window_step: 128,
-        spectrogram_size_search: 75000, // 4s at 2.4Msps with these settings
-        spectrogram_size_adjust: 5000,  // A bit over 0.25s with these settings
+        window_step: 512,
+        spectrogram_size_search: 3000, // 4s at 2.4Msps with these settings
+        spectrogram_size_adjust: 3000, // A bit over 0.25s with these settings
         spectrogram_adjust_slide: 2_400, // 1ms on each direction at 2.4Msps
         output_decimate,
         min_psr: min_psr as Scalar,
     };
 
-    let mut dsp = Dsp::new(baseband, freqs, dsp_settings);
-    dsp.first_run();
+    let mut dsp = Dsp::new(baseband, freqs.unwrap(), dsp_settings);
+    dsp.first_run().unwrap();
 }
