@@ -44,6 +44,7 @@ impl StreamedSamplesFreqs {
     // Gets which frequencies are present on the interval of time starting at epoch
     // start and continuing for samples, and at which times they are on.
     // All samples are assumed to be relative to start epoch.
+    // FREQUENCIES ARE RELATIVE TO CENTER FREQUENCY!
     pub fn get_frequencies_for_interval(&self, start: f64, dur: f64) -> Vec<FreqOnTimes> {
         let mut out = Vec::new();
 
@@ -53,13 +54,17 @@ impl StreamedSamplesFreqs {
             }
 
             out.push(FreqOnTimes {
-                freq: pair[0].freq,
-                start: pair[0].t - start,
-                end: pair[1].t - start,
+                freq: pair[0].freq - self.center_freq,
+                start: pair[0].t,
+                end: pair[1].t,
             });
         }
 
         out
+    }
+
+    pub fn get_center_freq(&self) -> f64 {
+        self.center_freq
     }
 
     // Returns current, and next freq change for given time

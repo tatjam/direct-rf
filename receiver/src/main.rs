@@ -39,11 +39,11 @@ fn main() {
         .unwrap_or(20);
 
     let dsp_settings = DspSettings {
-        window_size: 512,
-        window_step: 512,
-        spectrogram_size_search: 3000, // 4s at 2.4Msps with these settings
-        spectrogram_size_adjust: 3000, // A bit over 0.25s with these settings
-        spectrogram_adjust_slide: 2_400, // 1ms on each direction at 2.4Msps
+        window_size: 32,
+        window_step: 32,
+        spectrogram_size_search: 10000,
+        spectrogram_size_adjust: 5000,
+        spectrogram_adjust_slide: 2_400,
         output_decimate,
         min_psr: min_psr as Scalar,
     };

@@ -1,5 +1,6 @@
 use crate::stream::{FreqOnTimes, Sample, Scalar, StreamedSamplesFreqs};
 use anyhow::{Result, anyhow};
+use core::fmt;
 use csv::WriterBuilder;
 use ndarray::{Array1, Array2, ArrayViewMut1, azip, s};
 use ndarray_npy::write_npy;
@@ -52,15 +53,17 @@ struct ReferenceSpectrogram {
     window_size: f64,
     samp_rate: f64,
     cols: usize,
+    start_epoch: f64,
 }
 
 impl ReferenceSpectrogram {
-    pub fn new(window_size: f64, samp_rate: f64, cols: usize) -> Self {
+    pub fn new(window_size: f64, samp_rate: f64, cols: usize, start_epoch: f64) -> Self {
         Self {
             lines: HashMap::new(),
             window_size,
             samp_rate,
             cols,
+            start_epoch,
         }
     }
 
@@ -75,7 +78,7 @@ impl ReferenceSpectrogram {
 
     // Searches the line with the most entries, gets it and removes it
     // Returns the (bin, line) pair.
-    fn pull_biggest_line_ref(&mut self) -> Option<(usize, &mut Array1<Scalar>)> {
+    fn pull_biggest_line_ref(&mut self) -> Option<(usize, Array1<Scalar>)> {
         let mut max_entries = 0;
         let mut max_entries_line: Option<usize> = None;
 
@@ -88,7 +91,7 @@ impl ReferenceSpectrogram {
 
         Some((
             max_entries_line?,
-            &mut self.lines.get_mut(&max_entries_line?)?.data,
+            self.lines.remove(&max_entries_line?)?.data,
         ))
     }
 
@@ -105,11 +108,29 @@ impl ReferenceSpectrogram {
             return;
         };
 
-        let min_index = 0;
-        let max_index = 50;
+        let start_rel_t = freq.start - self.start_epoch;
+        let end_rel_t = freq.end - self.start_epoch;
+        let start_samp = start_rel_t * self.samp_rate / self.window_size;
+        let end_samp = end_rel_t * self.samp_rate / self.window_size;
 
-        self.add_entry_to_line(bins.0.0, min_index, max_index, bins.0.1);
-        self.add_entry_to_line(bins.1.0, min_index, max_index, bins.1.1);
+        let min_index = start_samp.clamp(0.0, self.cols as f64 - 1.0).floor() as usize;
+        let max_index = end_samp.clamp(0.0, self.cols as f64 - 1.0).ceil() as usize;
+
+        log::info!(
+            "freq start: {}, freq end: {}, our start: {}, min_index: {}, max_index: {}, cols: {}, our end: {}",
+            freq.start,
+            freq.end,
+            self.start_epoch,
+            min_index,
+            max_index,
+            self.cols,
+            self.start_epoch + self.cols as f64 / self.samp_rate as f64
+        );
+
+        if min_index != max_index - 1 && max_index < self.cols - 1 {
+            self.add_entry_to_line(bins.0.0, min_index, max_index, bins.0.1);
+            self.add_entry_to_line(bins.1.0, min_index, max_index, bins.1.1);
+        }
     }
 
     // Given index of bin in spectrogram FFT, returns the center frequency of said bin
@@ -146,14 +167,22 @@ impl ReferenceSpectrogram {
         let hz_per_bin = self.samp_rate / self.window_size;
         let fract_bin = equivf / hz_per_bin;
 
-        if equivf >= self.window_size {
+        if fract_bin > self.window_size - 1.0 {
             return None;
         }
 
         let upper = fract_bin.ceil();
-        let upperfac = (upper - fract_bin) / hz_per_bin;
+        let upperfac = if upper == fract_bin {
+            1.0
+        } else {
+            upper - fract_bin
+        };
         let lower = fract_bin.floor();
-        let lowerfac = (fract_bin - lower) / hz_per_bin;
+        let lowerfac = if lower == fract_bin {
+            0.0
+        } else {
+            fract_bin - lower
+        };
 
         debug_assert!(upperfac + lowerfac >= 0.999);
 
@@ -231,8 +260,9 @@ impl Dsp {
         };
 
         let mut real_planner = RealFftPlanner::<Scalar>::new();
-        let correlate_fft = real_planner.plan_fft_forward(settings.spectrogram_size_search);
-        let correlate_ifft = real_planner.plan_fft_inverse(settings.spectrogram_size_search);
+        // Double size to prevent circular-convolution messing up results
+        let correlate_fft = real_planner.plan_fft_forward(settings.spectrogram_size_search * 2);
+        let correlate_ifft = real_planner.plan_fft_inverse(settings.spectrogram_size_search * 2);
         let mut correlate_fft_scratch = Vec::new();
         correlate_fft_scratch.resize(correlate_fft.get_scratch_len(), Complex::new(0.0, 0.0));
 
@@ -260,7 +290,14 @@ impl Dsp {
     }
 
     pub fn first_run(&mut self) -> Result<()> {
-        let start = self.freqs.get_first_epoch() - 1.5;
+        let start = self.freqs.get_first_epoch() - 0.1;
+        log::info!(
+            "Baseband starts at {}, freqs start at {}",
+            self.baseband.get_header().start_timestamp / 1000,
+            self.freqs.get_first_epoch()
+        );
+
+        log::info!("Seeking to {}", start);
         self.baseband.seek_to_timestamp((start * 1000.0) as u64)?;
         self.spectrogram.sample0_epoch = start;
 
@@ -280,6 +317,11 @@ impl Dsp {
             .get_samples(self.spectrogram_buffer.as_mut_slice())?;
 
         //debug_assert_eq!(nread, nsamples);
+        log::info!(
+            "Able to read {} samples out of {} expected",
+            nread,
+            nsamples
+        );
 
         self.build_spectrogram();
         self.dump_spectrogram()?;
@@ -313,6 +355,8 @@ impl Dsp {
                 break;
             }
 
+            // It may be better to not use windowing (rect window) to prevent rejecting energy
+            // TODO: Switch to a Kaiser window, it seems to be used typically
             self.apply_hann();
             self.fft_window();
             // Hopefully this will be done efficiently?
@@ -384,10 +428,13 @@ impl Dsp {
             .freqs
             .get_frequencies_for_interval(start_t, start_t + end_offset);
 
+        println!("Reference start_t = {}, offset = {}", start_t, start_offset);
+
         let mut ref_spectrogram = ReferenceSpectrogram::new(
             self.settings.window_size as f64,
             self.baseband.get_header().samp_rate as f64,
             self.settings.spectrogram_size_search,
+            start_t,
         );
 
         for freq in &freqs {
@@ -406,8 +453,12 @@ impl Dsp {
         let mut fft_a: Array1<Sample> = Array1::zeros(n + 1);
         let mut fft_b: Array1<Sample> = Array1::zeros(n + 1);
 
+        log::info!("Correlating");
+
         // Correlate lines with the most entries until a good result is achieved
         while let Some((bin, line)) = ref_spectrogram.pull_biggest_line_ref() {
+            log::info!("Correlating bin {}", bin);
+
             // Move the measured line into scratch_a and zero the rest
             scratch_a
                 .slice_mut(s![..n])
@@ -415,8 +466,11 @@ impl Dsp {
                 .assign(&self.spectrogram.data.slice(s![bin, ..]).flatten());
             scratch_a.slice_mut(s![n..]).fill(0.0);
             // Move the reference line into scratch_b and zero the rest
-            scratch_b.slice_mut(s![..n]).assign(line);
+            scratch_b.slice_mut(s![..n]).assign(&line);
             scratch_b.slice_mut(s![n..]).fill(0.0);
+
+            write_npy(format!("dump-{}-rx.npy", bin), &scratch_a).unwrap();
+            write_npy(format!("dump-{}-ref.npy", bin), &scratch_b).unwrap();
 
             // FFT both for fast convolution
             self.correlate_fft
@@ -438,7 +492,14 @@ impl Dsp {
             // Multiply together (convolve in time domain)
             azip!((a in &mut fft_a, &b in &fft_b) *a *= b);
 
-            // Return to time domain
+            // Return to time domain by the IFFT
+            self.correlate_ifft
+                .process_with_scratch(
+                    fft_a.as_slice_mut().unwrap(),
+                    scratch_a.as_slice_mut().unwrap(),
+                    self.correlate_fft_scratch.as_mut_slice(),
+                )
+                .unwrap();
         }
 
         0
