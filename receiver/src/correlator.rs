@@ -79,12 +79,8 @@ pub struct SpectrogramCorrelator {
 }
 
 impl SpectrogramCorrelator {
-    pub fn get_max_length_windows(&self) -> usize {
-        self.max_spectrogram_size
-    }
-
     pub fn get_max_length_samples(&self) -> usize {
-        self.max_spectrogram_size * self.window_step
+        (self.max_spectrogram_size - 1) * self.window_step + self.window_size
     }
 
     fn build_window_fft(window_size: usize) -> (Arc<dyn Fft<Scalar>>, Vec<Sample>) {
@@ -189,7 +185,7 @@ impl SpectrogramCorrelator {
             out.column_mut(window_ptr)
                 .assign(&samples_window.mapv(|v| v.abs()));
 
-            buffer_ptr += self.window_size;
+            buffer_ptr += self.window_step;
         }
 
         out
@@ -293,7 +289,7 @@ impl SpectrogramCorrelator {
         center_freq: f64,
         freqs: &Vec<FreqChange>,
     ) -> i64 {
-        let num_windows = samples.len() / self.window_step;
+        let num_windows = (samples.len() - self.window_size) / self.window_step + 1;
         assert!(num_windows > 1);
 
         let spectrogram = self.build_spectrogram(samples, num_windows);

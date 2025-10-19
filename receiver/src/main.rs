@@ -44,8 +44,8 @@ fn main() {
 
     let dsp_settings = DspSettings {
         window_size: 512,
-        window_step: 512,
-        spectrogram_size_search: 20000,
+        window_step: 256,
+        spectrogram_size_search: 20000 * 2,
         spectrogram_size_adjust: 5000,
         output_decimate,
         min_psr: min_psr as Scalar,
