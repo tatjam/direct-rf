@@ -307,6 +307,9 @@ impl SpectrogramCorrelator {
             self.correlate_line(&rx_line, &line, &mut buffers);
 
             // TODO: Early exit condition?
+            if buffers.accum_i > 50 {
+                break;
+            }
         }
 
         // Pick the most popular entry
@@ -318,11 +321,15 @@ impl SpectrogramCorrelator {
             .0;
         log::info!("Max entry computed to be: {}", max_entry);
 
-        // TODO: If max_entry >= cols() / 2, then it's actually a backwards seek and not a delay
-        // The maximum entry is actually the delay in spectrogram windows needed, we could achieve sub-window
-        // accuracy by averaging, but for now this is enough (we center on the window)
-        // Seek the middle of the maximum correlation window (we actually set ourselves in the center)
-        *max_entry as i64 * self.window_step as i64 + self.window_size as i64 / 2
+        // TODO: Check that this is correct!
+        let max_entry = if *max_entry as i64 > self.max_spectrogram_size as i64 {
+            // It's actually delayed
+            *max_entry as i64 - self.max_spectrogram_size as i64 * 2
+        } else {
+            *max_entry as i64
+        };
+
+        max_entry * self.window_step as i64 + self.window_size as i64 / 2
     }
 }
 

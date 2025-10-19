@@ -104,7 +104,7 @@ impl StreamedSamplesFreqs {
     /// Return hypothetical baseband data for the reference frequencies.
     /// If we run out of data, the vector will be zero-padded
     /// We return number of samples read alongside them.
-    pub fn get_next(&mut self, num_samples: usize) -> (Array1<Sample>, usize) {
+    pub fn get_next(&mut self, num_samples: usize, foffset: f64) -> (Array1<Sample>, usize) {
         let mut out = Array1::zeros(num_samples);
 
         let mut num_written = 0;
@@ -123,11 +123,11 @@ impl StreamedSamplesFreqs {
                     break;
                 }
 
-                let rf = pair.0.freq - self.center_freq;
+                let rf = pair.0.freq - self.center_freq + foffset;
                 let w = 2.0 * std::f64::consts::PI * rf;
                 self.phase += w * self.tstep;
                 out[num_written] =
-                    Sample::new(self.phase.sin() as Scalar, self.phase.cos() as Scalar);
+                    Sample::new(self.phase.cos() as Scalar, self.phase.sin() as Scalar);
 
                 num_written += 1;
                 this_step_written += 1;
@@ -169,7 +169,7 @@ impl StreamedSamplesFreqs {
         let file = File::create(path)?;
         let mut sink = sdriq::Sink::new(file, header)?;
         loop {
-            let (samples, num_read) = self.get_next(10000);
+            let (samples, num_read) = self.get_next(10000, 0.0);
             if num_read == 0 {
                 break;
             }

@@ -3,7 +3,7 @@ use std::fs::File;
 use crate::dsp::{Dsp, DspSettings};
 use crate::stream::{Scalar, StreamedSamplesFreqs};
 use log::info;
-use sdriq::Source;
+use sdriq::{Header, Sink, Source};
 use stream::load_freqs_file;
 
 mod correlator;
@@ -40,7 +40,7 @@ fn main() {
     let output_decimate: usize = pargs
         .opt_value_from_str(["-d", "--decimate"])
         .unwrap()
-        .unwrap_or(20);
+        .unwrap_or(1);
 
     let dsp_settings = DspSettings {
         window_size: 512,
@@ -51,6 +51,19 @@ fn main() {
         min_psr: min_psr as Scalar,
     };
 
+    let header = Header {
+        samp_rate: baseband.get_header().samp_rate / output_decimate as u32,
+        center_freq: 0,
+        start_timestamp: baseband.get_header().start_timestamp, //< Not fully correct
+        samp_size: 24,
+    };
+
     let mut dsp = Dsp::new(baseband, freqs.unwrap(), dsp_settings);
-    dsp.first_run().unwrap();
+    let samples = dsp.run(10000000).unwrap();
+
+    let file = File::create("file.sdriq").unwrap();
+
+    let mut sink = Sink::new(file, header).unwrap();
+    sink.write_all_samples_denorm(samples.as_slice().unwrap())
+        .unwrap();
 }
