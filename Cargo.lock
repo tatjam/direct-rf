@@ -1034,6 +1034,7 @@ dependencies = [
  "ndarray",
  "ndarray-npy",
  "pico-args",
+ "rand",
  "realfft",
  "regex",
  "rustfft",

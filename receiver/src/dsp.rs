@@ -4,6 +4,7 @@ use core::fmt;
 use csv::WriterBuilder;
 use ndarray::{Array1, Array2, ArrayViewMut1, azip, s};
 use ndarray_npy::write_npy;
+use rand::prelude::*;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use rustfft::num_complex::Complex;
 use rustfft::num_complex::ComplexFloat;
@@ -99,7 +100,8 @@ impl ReferenceSpectrogram {
         let line = self.get_line_ref(bin);
         line.data
             .slice_mut(s![min_index..max_index])
-            .mapv_inplace(|v| v + fac);
+            .mapv_inplace(|v| if v > 0.0 || fac == 0.0 { v } else { fac });
+        //.mapv_inplace(|v| v + fac);
         line.num_entries += 1;
     }
 
@@ -115,17 +117,6 @@ impl ReferenceSpectrogram {
 
         let min_index = start_samp.clamp(0.0, self.cols as f64 - 1.0).floor() as usize;
         let max_index = end_samp.clamp(0.0, self.cols as f64 - 1.0).ceil() as usize;
-
-        log::info!(
-            "freq start: {}, freq end: {}, our start: {}, min_index: {}, max_index: {}, cols: {}, our end: {}",
-            freq.start,
-            freq.end,
-            self.start_epoch,
-            min_index,
-            max_index,
-            self.cols,
-            self.start_epoch + self.cols as f64 / self.samp_rate as f64
-        );
 
         if min_index != max_index - 1 && max_index < self.cols - 1 {
             self.add_entry_to_line(bins.0.0, min_index, max_index, bins.0.1);
@@ -187,8 +178,8 @@ impl ReferenceSpectrogram {
         debug_assert!(upperfac + lowerfac >= 0.999);
 
         Some((
-            (lower as usize, lowerfac as Scalar),
-            (upper as usize, upperfac as Scalar),
+            (lower as usize, 1.0 - lowerfac as Scalar),
+            (upper as usize, 1.0 - upperfac as Scalar),
         ))
     }
 }
@@ -316,6 +307,37 @@ impl Dsp {
             .baseband
             .get_samples(self.spectrogram_buffer.as_mut_slice())?;
 
+        /*
+        let mut rng = rand::rng();
+
+        let power_before: Scalar = self
+            .spectrogram_buffer
+            .iter()
+            .map(|v| v.abs() * v.abs())
+            .sum();
+
+        // Add additive noise to the samples
+        for d in &mut self.spectrogram_buffer.iter_mut() {
+            let amp = 100000000.0;
+            let re = rng.random_range(-amp..=amp);
+            let im = rng.random_range(-amp..=amp);
+            *d += Complex::new(re, im);
+        }
+
+        let power_after: Scalar = self
+            .spectrogram_buffer
+            .iter()
+            .map(|v| v.abs() * v.abs())
+            .sum();
+
+        log::info!(
+            "Power before noise: {}, power after noise: {}, SNR: {}dB",
+            power_before,
+            power_after,
+            10.0 * (power_before / power_after).log10()
+        );
+        */
+
         //debug_assert_eq!(nread, nsamples);
         log::info!(
             "Able to read {} samples out of {} expected",
@@ -357,7 +379,7 @@ impl Dsp {
 
             // It may be better to not use windowing (rect window) to prevent rejecting energy
             // TODO: Switch to a Kaiser window, it seems to be used typically
-            self.apply_hann();
+            //self.apply_hann();
             self.fft_window();
             // Hopefully this will be done efficiently?
             self.spectrogram
@@ -453,7 +475,8 @@ impl Dsp {
         let mut fft_a: Array1<Sample> = Array1::zeros(n + 1);
         let mut fft_b: Array1<Sample> = Array1::zeros(n + 1);
 
-        log::info!("Correlating");
+        let mut accum_corr: Array1<Scalar> = Array1::zeros(n * 2);
+        let mut accum_i = 0;
 
         // Correlate lines with the most entries until a good result is achieved
         while let Some((bin, line)) = ref_spectrogram.pull_biggest_line_ref() {
@@ -490,7 +513,9 @@ impl Dsp {
                 .unwrap();
 
             // Multiply together (convolve in time domain)
-            azip!((a in &mut fft_a, &b in &fft_b) *a *= b);
+            azip!((a in &mut fft_a, &b in &fft_b) *a *= b.conj());
+
+            self.correlate_fft_scratch.fill(Complex::new(0.0, 0.0));
 
             // Return to time domain by the IFFT
             self.correlate_ifft
@@ -500,6 +525,13 @@ impl Dsp {
                     self.correlate_fft_scratch.as_mut_slice(),
                 )
                 .unwrap();
+
+            azip!((a in &mut accum_corr, &b in &scratch_a) *a += b);
+
+            write_npy(format!("dump-{}-corr.npy", bin), &scratch_a).unwrap();
+            write_npy(format!("dump-{}-accu-{}.npy", bin, accum_i), &accum_corr).unwrap();
+
+            accum_i += 1;
         }
 
         0
