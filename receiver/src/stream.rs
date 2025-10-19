@@ -2,16 +2,10 @@
 //! big files without hogging memory and having long load times.
 
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, TimeZone, Utc};
-use log::{info, warn};
 use regex::Regex;
 use rustfft::num_complex::Complex;
-use sdriq::Source;
 use std::fs::File;
-use std::hint::unreachable_unchecked;
 use std::io::{BufRead, BufReader};
-use std::ops::Deref;
-use std::path::Path;
 
 use ndarray::prelude::*;
 

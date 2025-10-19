@@ -1,7 +1,5 @@
 use crate::stream::{FreqOnTimes, Sample, Scalar, StreamedSamplesFreqs};
 use anyhow::{Result, anyhow};
-use core::fmt;
-use csv::WriterBuilder;
 use ndarray::{Array1, Array2, ArrayViewMut1, azip, s};
 use ndarray_npy::write_npy;
 use rand::prelude::*;
@@ -281,7 +279,7 @@ impl Dsp {
     }
 
     pub fn first_run(&mut self) -> Result<()> {
-        let start = self.freqs.get_first_epoch() - 0.1;
+        let start = self.freqs.get_first_epoch() - 1.0;
         log::info!(
             "Baseband starts at {}, freqs start at {}",
             self.baseband.get_header().start_timestamp / 1000,
@@ -307,9 +305,9 @@ impl Dsp {
             .baseband
             .get_samples(self.spectrogram_buffer.as_mut_slice())?;
 
-        /*
         let mut rng = rand::rng();
 
+        /*
         let power_before: Scalar = self
             .spectrogram_buffer
             .iter()
@@ -318,7 +316,7 @@ impl Dsp {
 
         // Add additive noise to the samples
         for d in &mut self.spectrogram_buffer.iter_mut() {
-            let amp = 100000000.0;
+            let amp = 3000000.0;
             let re = rng.random_range(-amp..=amp);
             let im = rng.random_range(-amp..=amp);
             *d += Complex::new(re, im);
@@ -478,7 +476,11 @@ impl Dsp {
         let mut accum_corr: Array1<Scalar> = Array1::zeros(n * 2);
         let mut accum_i = 0;
 
-        // Correlate lines with the most entries until a good result is achieved
+        // Maps each max_index to the sum of its PSR (*10000) over the accumulation period,
+        // such that picking the maximum is reasonable
+        let mut max_index_histogram: HashMap<usize, u64> = HashMap::new();
+
+        // Correlate lines with the most entries until a good result is achieved (good side-lobe ratio)
         while let Some((bin, line)) = ref_spectrogram.pull_biggest_line_ref() {
             log::info!("Correlating bin {}", bin);
 
@@ -531,8 +533,23 @@ impl Dsp {
             write_npy(format!("dump-{}-corr.npy", bin), &scratch_a).unwrap();
             write_npy(format!("dump-{}-accu-{}.npy", bin, accum_i), &accum_corr).unwrap();
 
+            let (max_idx, psr) = get_max_index_and_psr(&accum_corr);
+            log::info!("Max index = {} PSR = {}", max_idx, psr);
+
+            // PSR weighted histogram
+            let entry = max_index_histogram.entry(max_idx).or_insert(0);
+            *entry += (psr * 10000.0) as u64;
+
             accum_i += 1;
         }
+
+        // Pick the most popular entry
+        let max_entry = max_index_histogram
+            .iter()
+            .max_by_key(|(_, v)| *v)
+            .unwrap()
+            .0;
+        log::info!("Max entry computed to be: {}", max_entry);
 
         0
     }
@@ -557,4 +574,32 @@ impl Dsp {
             &mut self.window_fft_scratch,
         );
     }
+}
+
+// Returns the index of the maximum value in data, and how big it's compared to
+// the next 10 biggest values (their average)
+fn get_max_index_and_psr(data: &Array1<Scalar>) -> (usize, Scalar) {
+    let mut max = Vec::with_capacity(10);
+    let mut max_idx = 0;
+
+    for (i, &v) in data.iter().enumerate() {
+        let pos = max
+            .binary_search_by(|&x| v.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or_else(|e| e);
+        if max.len() < 10 {
+            max.insert(pos, v);
+            if pos == 0 {
+                max_idx = i;
+            }
+        } else if pos < 10 {
+            max.insert(pos, v);
+            max.pop();
+            if pos == 0 {
+                max_idx = i;
+            }
+        }
+    }
+
+    let avg: Scalar = max[1..].iter().sum::<Scalar>() / max[1..].len() as Scalar;
+    (max_idx, max[0] / avg)
 }
