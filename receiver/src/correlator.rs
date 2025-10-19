@@ -34,9 +34,9 @@ impl CorrelationBuffers {
         // to prevent circular correlation artefacts.
         let buff_rx: Array1<Scalar> = Array1::zeros(num_windows * 2);
         let buff_ref: Array1<Scalar> = Array1::zeros(num_windows * 2);
-        // Imaginary buffers to perform the correlation.
-        let fft_rx: Array1<Sample> = Array1::zeros(num_windows);
-        let fft_ref: Array1<Sample> = Array1::zeros(num_windows);
+        // Imaginary buffers to perform the correlation. Note the +1 needed for the DC component.
+        let fft_rx: Array1<Sample> = Array1::zeros(num_windows + 1);
+        let fft_ref: Array1<Sample> = Array1::zeros(num_windows + 1);
 
         // Maps each max_index to the sum of its PSR (*10000) over the accumulation period,
         // such that picking the maximum is reasonable
@@ -187,7 +187,7 @@ impl SpectrogramCorrelator {
             self.apply_hann(&mut samples_window);
             self.fft_window(&mut samples_window);
             out.column_mut(window_ptr)
-                .assign(&samples.mapv(|v| v.abs()));
+                .assign(&samples_window.mapv(|v| v.abs()));
 
             buffer_ptr += self.window_size;
         }
@@ -331,6 +331,7 @@ impl SpectrogramCorrelator {
 }
 
 /// An individual "line" (single frequency bin over the duration of the spectrogram)
+#[derive(Debug)]
 struct ReferenceSpectrogramLine {
     data: Array1<Scalar>,
     num_entries: usize,
@@ -405,11 +406,13 @@ impl ReferenceSpectrogram {
     fn add_entry_to_line(&mut self, bin: usize, start_samp: i64, end_samp: i64, fac: f32) {
         assert!(start_samp < end_samp);
 
-        let min_window = (start_samp / self.window_step as i64).clamp(0, self.num_windows as i64);
-        let max_window = (end_samp / self.window_step as i64).clamp(0, self.num_windows as i64);
+        let min_window =
+            (start_samp / self.window_step as i64).clamp(0, self.num_windows as i64 - 1);
+        let max_window = (end_samp / self.window_step as i64).clamp(0, self.num_windows as i64 - 1);
 
         let line = self.get_line_ref(bin);
 
+        // TODO: Rewrite this using a high order method from ndarray for speed
         for window in min_window..=max_window {
             // TODO: Edge effect on partial windows where the frequency starts / ends "in the middle"
             let window_fac = if window == min_window {
@@ -435,7 +438,7 @@ impl ReferenceSpectrogram {
     }
 
     fn add_freq(&mut self, freq: &FreqOnTimes) {
-        let Some(bins) = self.hz_to_bin(freq.freq) else {
+        let Some(bins) = self.hz_to_bin(freq.freq - self.center_freq) else {
             return;
         };
 
