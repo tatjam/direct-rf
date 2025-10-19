@@ -60,6 +60,9 @@ pub struct SpectrogramCorrelator {
     /// Distance between the start of two consecutive windows
     window_step: usize,
 
+    /// Max number of windows that can be processed. Any less are tolerated as zero-padding.
+    max_spectrogram_size: usize,
+
     /// The FFT used for spectrogram building
     window_fft: Arc<dyn Fft<Scalar>>,
     /// Scatch buffer for spectrogram building
@@ -76,6 +79,14 @@ pub struct SpectrogramCorrelator {
 }
 
 impl SpectrogramCorrelator {
+    pub fn get_max_length_windows(&self) -> usize {
+        self.max_spectrogram_size
+    }
+
+    pub fn get_max_length_samples(&self) -> usize {
+        self.max_spectrogram_size * self.window_step
+    }
+
     fn build_window_fft(window_size: usize) -> (Arc<dyn Fft<Scalar>>, Vec<Sample>) {
         let mut fft_planner = FftPlanner::new();
         let window_fft = fft_planner.plan_fft_forward(window_size);
@@ -84,7 +95,6 @@ impl SpectrogramCorrelator {
 
         (window_fft, window_fft_scratch)
     }
-
     fn build_window_function(window_size: usize) -> Array1<Scalar> {
         let mut window_function = Array1::zeros(window_size * 2);
         let n = window_size - 1;
@@ -141,6 +151,7 @@ impl SpectrogramCorrelator {
             window_fft,
             window_fft_scratch,
             window_function,
+            max_spectrogram_size: spectrogram_size,
         }
     }
 
@@ -311,12 +322,11 @@ impl SpectrogramCorrelator {
             .0;
         log::info!("Max entry computed to be: {}", max_entry);
 
-        // TODO: RETURN NUMBER OF SAMPLES NOT WINDOWS!
-        //
         // TODO: If max_entry >= cols() / 2, then it's actually a backwards seek and not a delay
         // The maximum entry is actually the delay in spectrogram windows needed, we could achieve sub-window
         // accuracy by averaging, but for now this is enough (we center on the window)
-        *max_entry as i64
+        // Seek the middle of the maximum correlation window (we actually set ourselves in the center)
+        *max_entry as i64 * self.window_step as i64 + self.window_size as i64 / 2
     }
 }
 

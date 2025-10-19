@@ -4,7 +4,9 @@ use crate::dsp::{Dsp, DspSettings};
 use crate::stream::{Scalar, StreamedSamplesFreqs};
 use log::info;
 use sdriq::Source;
+use stream::load_freqs_file;
 
+mod correlator;
 mod dsp;
 mod stream;
 
@@ -22,8 +24,10 @@ fn main() {
         .unwrap()
         .unwrap_or(String::from("freqs.csv"));
     info!("Loading transmitted frequencies from {}", freqs_path);
+
+    let freqs = load_freqs_file(freqs_path).unwrap();
     let freqs = StreamedSamplesFreqs::new(
-        freqs_path,
+        freqs,
         baseband.get_header().center_freq as f64,
         baseband.get_header().samp_rate,
     );
@@ -43,7 +47,6 @@ fn main() {
         window_step: 512,
         spectrogram_size_search: 20000,
         spectrogram_size_adjust: 5000,
-        spectrogram_adjust_slide: 2_400,
         output_decimate,
         min_psr: min_psr as Scalar,
     };
