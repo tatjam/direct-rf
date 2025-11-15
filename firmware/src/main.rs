@@ -9,8 +9,10 @@ use embassy_stm32::time::Hertz;
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
+mod sequencer;
+
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     let mut config = Config::default();
     {
         use embassy_stm32::rcc::*;
@@ -39,15 +41,20 @@ async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(config);
     info!("Hello World!");
 
-    let mut led = Output::new(p.PD10, Level::High, Speed::Low);
+    spawner
+        .spawn(sequencer::comm_task(
+            p.USART3,
+            p.PB10,
+            p.PB11,
+            p.GPDMA1_CH0,
+            p.GPDMA1_CH1,
+        ))
+        .unwrap();
+
+    spawner.spawn(sequencer::sequencer_task()).unwrap();
+    spawner.spawn(sequencer::pll_controller_task()).unwrap();
 
     loop {
-        info!("high");
-        led.set_high();
-        Timer::after_millis(500).await;
-
-        info!("low");
-        led.set_low();
-        Timer::after_millis(500).await;
+        Timer::after_millis(1000).await;
     }
 }

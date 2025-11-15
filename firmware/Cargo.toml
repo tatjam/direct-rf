@@ -21,9 +21,8 @@ libm = "0.2.15"
 heapless = "0.8.0"
 common = { path = "../common" }
 
-# [dependencies.stm32h7]
-# version = "^0.16.0"
-# features = ["stm32h7s", "rt"]
+serde = { version = "1.0.0", default-features = false }
+postcard = "1.0.0"
 
 [dependencies.cortex-m]
 version="0.7.7"

@@ -8,11 +8,6 @@ pub const MAX_UPLINK_MSG_SIZE: usize = 256;
 
 #[derive(Serialize, Deserialize)]
 pub enum UplinkMsg {
-    Ping(),
     PushPLLChange(PLLChange),
     PushFracn(u8, [u16; 32]),
-    UploadDone(),
-    ClearBuffer(),
-    StartNow(),
-    StopNow(),
 }
