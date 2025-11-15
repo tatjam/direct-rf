@@ -7,14 +7,17 @@ use embassy_stm32::{
     usart::{self, Uart},
 };
 use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, signal::Signal,
+    blocking_mutex::{CriticalSectionMutex, raw::CriticalSectionRawMutex},
+    channel::Channel,
+    signal::Signal,
 };
 use embassy_time::Timer;
+use heapless::Vec;
 use postcard::accumulator::CobsAccumulator;
 
 enum FreqCommand {
     Fracn(u16),
-    Change(u8),
+    Change(),
 }
 
 // This signal is used to send commands to the PLL
@@ -24,6 +27,8 @@ static LIVE_COMMAND: Signal<CriticalSectionRawMutex, FreqCommand> = Signal::new(
 // on the communication link
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, FreqCommand, 4096> = Channel::new();
 
+static PLL_CHANGE_CHANNEL: Channel<CriticalSectionRawMutex, PLLChange, 8> = Channel::new();
+
 #[embassy_executor::task]
 pub async fn pll_controller_task() {
     loop {
@@ -31,7 +36,7 @@ pub async fn pll_controller_task() {
 
         match cmd {
             FreqCommand::Fracn(_fracn) => {}
-            FreqCommand::Change(_change_idx) => {}
+            FreqCommand::Change() => {}
         }
     }
 }
@@ -54,8 +59,8 @@ bind_interrupts!(struct Irqs {
 async fn handle_comm_msg(msg: UplinkMsg) {
     match msg {
         UplinkMsg::PushPLLChange(pllchange) => {
-            todo!("Setup the pll change in the buffer");
-            COMMAND_CHANNEL.send(FreqCommand::Change(0)).await;
+            PLL_CHANGE_CHANNEL.send(pllchange).await;
+            COMMAND_CHANNEL.send(FreqCommand::Change()).await;
         }
         UplinkMsg::PushFracn(num, buf) => {
             for i in 0..num {
