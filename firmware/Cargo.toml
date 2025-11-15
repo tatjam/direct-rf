@@ -6,6 +6,7 @@ edition = "2024"
 
 
 [dependencies]
+embassy-executor = { version = "0.9.0", features = ["defmt", "arch-cortex-m", "executor-thread"] }
 cortex-m-rt = "0.7.5"
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"

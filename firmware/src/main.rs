@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-mod comm;
 mod sequencer;
 mod util;
 
@@ -81,72 +80,16 @@ fn setup_gpio(rcc: &mut stm32h7s::RCC, gpioc: &mut stm32h7s::GPIOC) {
     // gpioc.ospeedr().modify(|_, w| w.ospeed9().very_high_speed());
 }
 
-fn handle_msg(msg: UplinkMsg, sequencer_state: &InterruptAccessible<SequencerState>) {
-    match msg {
-        UplinkMsg::Ping() => {
-            defmt::info!("Pong :)")
-        }
-        UplinkMsg::PushPLLChange(ch) => {
-            util::with(sequencer_state, |state| {
-                sequencer::push_pllchange(state, ch);
-            });
-        }
-        UplinkMsg::PushFracn(num, arr) => {
-            util::with(sequencer_state, |state| {
-                sequencer::push_fracn(state, &arr[0..(num as usize)]);
-            });
-        }
-        UplinkMsg::ClearBuffer() => {
-            util::with(sequencer_state, |state| {
-                sequencer::clear_buffers(state);
-            });
-        }
-        UplinkMsg::UploadDone() => {
-            util::with(sequencer_state, |state| {
-                sequencer::notify_upload_done(state);
-            });
-        }
-        UplinkMsg::StartNow() => {
-            util::with(sequencer_state, |state| {
-                defmt::info!("Launching");
-                sequencer::launch(state);
-            });
-        }
-        UplinkMsg::StopNow() => {
-            util::with(sequencer_state, |state| {
-                defmt::info!("Stopping");
-                sequencer::stop(state);
-            });
-        }
-    }
-}
+#[embassy_executor::main]
+async fn main(s: embassy_executor::Spawner) {
+    defmt::info!("Hello, world!");
+    // let mut periph = stm32h7s::Peripherals::take().unwrap();
+    // defmt::info!("Hello directrf!");
 
-// This marks the entrypoint of our application. The cortex_m_rt creates some
-// startup code before this, but we don't need to worry about this. otably, it
-// enables the FPU
-#[entry]
-fn main() -> ! {
-    let mut periph = stm32h7s::Peripherals::take().unwrap();
-    defmt::info!("Hello directrf!");
+    // setup_hse(&mut periph.RCC, &mut periph.FLASH);
+    // setup_gpio(&mut periph.RCC, &mut periph.GPIOC);
 
-    setup_hse(&mut periph.RCC, &mut periph.FLASH);
-    setup_gpio(&mut periph.RCC, &mut periph.GPIOC);
-
-    periph.RCC.ahb4enr().modify(|_, w| w.gpioaen().enabled());
-    periph.GPIOA.moder().modify(|_, w| w.mode8().alternate());
-
-    let comm_state = comm::setup(&mut periph.RCC, &periph.GPIOD, periph.USART3);
-    let sequencer_state = sequencer::setup(periph.RCC, periph.TIM2);
-
-    defmt::info!("Sequencer is setup!");
-
-    loop {
-        let msg = util::with(comm_state, comm::get_message);
-
-        if let Some(v) = msg {
-            handle_msg(v, sequencer_state);
-        } else {
-            // Busy loop
-        }
-    }
+    // periph.RCC.ahb4enr().modify(|_, w| w.gpioaen().enabled());
+    // periph.GPIOA.moder().modify(|_, w| w.mode8().alternate());
+    loop {}
 }
