@@ -1,95 +1,53 @@
 #![no_std]
 #![no_main]
 
-mod sequencer;
-mod util;
-
-use crate::sequencer::SequencerState;
-use crate::util::InterruptAccessible;
-use common::comm_messages::UplinkMsg;
-use core::hint::black_box;
-use cortex_m_rt::entry;
-use defmt::export::panic;
-use defmt_rtt as _;
-use panic_probe as _;
-use stm32h7::stm32h7s;
-
-// Assumes we are on a NUCLEO board, which has a 24MHz clock source connected to HSE
-fn setup_hse(rcc: &mut stm32h7s::RCC, flash: &mut stm32h7s::FLASH) {
-    // Enable monitor output, dividing PLL1 clock frequency by 100
-    // (Note this is not exactly the system frequency! It differs by divp)
-    rcc.cfgr()
-        .modify(|_, w| unsafe { w.mco1().pll1_q().mco1pre().bits(10) });
-    rcc.pll1divr1()
-        .modify(|_, w| unsafe { w.divq().bits(10 - 1) });
-    rcc.pllcfgr().modify(|_, w| w.divq1en().enabled());
-
-    defmt::info!("Starting HSE");
-    rcc.cr().modify(|_, w| w.hseon().set_bit());
-
-    // Wait for HSE ready
-    while !rcc.cr().read().hserdy().bit_is_set() {}
-
-    defmt::info!("HSE is ready");
-
-    // Use a PLL for system clock (which also drives APB1 and AHB bus clocks)
-    // This PLL is also driven by HSE
-    // Critically, note that TIM uses the bus clock, so we want reduced jitter
-    // (We use a 24MHz clock and divide by 2 to get 12Mhz reference in PLL1)
-    rcc.pllckselr()
-        .modify(|_, w| w.divm1().set(2).pllsrc().hse());
-    rcc.pllcfgr().modify(|_, w| w.pll1rge().range8());
-
-    // Use the 384 to 1672MHz VCO
-    rcc.pllcfgr().modify(|_, w| w.pll1vcosel().clear_bit());
-    // This makes the VCO oscillate at 480MHz, and output a signal at 120MHz
-    rcc.pll1divr1()
-        .modify(|_, w| unsafe { w.divn1().bits(19).divp().bits(2 - 1) });
-    // Enable DIVP output
-    rcc.pllcfgr().modify(|_, w| w.divp1en().enabled());
-
-    rcc.cr().modify(|_, w| w.pll1on().set_bit());
-
-    // Wait for PLL ready
-    while rcc.cr().read().pll1rdy().bit_is_clear() {}
-
-    defmt::info!("PLL1 is ready!");
-
-    // Set FLASH to increase delay states. We over-estimate a bit
-    flash.acr().modify(|_, w| unsafe { w.latency().bits(3) });
-
-    // Set system clock to use PLL1
-    rcc.cfgr().modify(|_, w| w.sw().pll1());
-
-    if !rcc.cfgr().read().sw().is_pll1() {
-        defmt::error!("Could not clock system using PLl1");
-        panic();
-    }
-    defmt::info!("System is clocked using PLL!");
-}
-
-// Launches GPIO peripheral and setups GPIO PC9 for fastest possible operation,
-// also connecting it to MCO2 (alternate function)
-fn setup_gpio(rcc: &mut stm32h7s::RCC, gpioc: &mut stm32h7s::GPIOC) {
-    // Enable the gpioa peripheral
-    rcc.ahb4enr().modify(|_, w| w.gpiocen().enabled());
-
-    // Configure PC9 for special function
-    gpioc.moder().modify(|_, w| w.mode9().alternate());
-    // Set it for highest speed operation
-    // gpioc.ospeedr().modify(|_, w| w.ospeed9().very_high_speed());
-}
+use defmt::*;
+use embassy_executor::Spawner;
+use embassy_stm32::Config;
+use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::time::Hertz;
+use embassy_time::Timer;
+use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
-async fn main(s: embassy_executor::Spawner) {
-    defmt::info!("Hello, world!");
-    // let mut periph = stm32h7s::Peripherals::take().unwrap();
-    // defmt::info!("Hello directrf!");
+async fn main(_spawner: Spawner) {
+    let mut config = Config::default();
+    {
+        use embassy_stm32::rcc::*;
+        config.rcc.hse = Some(Hse {
+            freq: Hertz(24_000_000),
+            mode: HseMode::Oscillator,
+        });
+        config.rcc.pll1 = Some(Pll {
+            source: PllSource::HSE,
+            prediv: PllPreDiv::DIV3,
+            mul: PllMul::MUL150,
+            divp: Some(PllDiv::DIV2),
+            divq: None,
+            divr: None,
+            divs: None,
+            divt: None,
+        });
+        config.rcc.sys = Sysclk::PLL1_P; // 600 Mhz
+        config.rcc.ahb_pre = AHBPrescaler::DIV2; // 300 Mhz
+        config.rcc.apb1_pre = APBPrescaler::DIV2; // 150 Mhz
+        config.rcc.apb2_pre = APBPrescaler::DIV2; // 150 Mhz
+        config.rcc.apb4_pre = APBPrescaler::DIV2; // 150 Mhz
+        config.rcc.apb5_pre = APBPrescaler::DIV2; // 150 Mhz
+        config.rcc.voltage_scale = VoltageScale::HIGH;
+    }
+    let p = embassy_stm32::init(config);
+    info!("Hello World!");
 
-    // setup_hse(&mut periph.RCC, &mut periph.FLASH);
-    // setup_gpio(&mut periph.RCC, &mut periph.GPIOC);
+    let mut led = Output::new(p.PD10, Level::High, Speed::Low);
 
-    // periph.RCC.ahb4enr().modify(|_, w| w.gpioaen().enabled());
-    // periph.GPIOA.moder().modify(|_, w| w.mode8().alternate());
-    loop {}
+    loop {
+        info!("high");
+        led.set_high();
+        Timer::after_millis(500).await;
+
+        info!("low");
+        led.set_low();
+        Timer::after_millis(500).await;
+    }
 }

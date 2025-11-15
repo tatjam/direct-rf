@@ -4,22 +4,26 @@ name = "firmware"
 version = "0.1.0"
 edition = "2024"
 
-
 [dependencies]
-embassy-executor = { version = "0.9.0", features = ["defmt", "arch-cortex-m", "executor-thread"] }
-cortex-m-rt = "0.7.5"
+embassy-stm32 = { version = "0.4.0", features = ["defmt", "stm32h7s3l8", "time-driver-tim2", "exti", "memory-x", "unstable-pac", "chrono"] }
+embassy-sync = { version = "0.7.2", features = ["defmt"] }
+embassy-executor = { version = "0.9.0", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
+embassy-time = { version = "0.5.0", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+# embassy-net = { version = "0.7.1", features = ["defmt", "udp", "medium-ethernet", "medium-ip", "proto-ipv4"] }
+embassy-usb = { version = "0.5.1", features = ["defmt"] }
+embassy-futures = { version = "0.1.2" }
+
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"
+cortex-m-rt = "0.7.5"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 libm = "0.2.15"
-serde = { version = "1.0.0", default-features = false }
-postcard = "1.0.0"
 heapless = "0.8.0"
 common = { path = "../common" }
 
-[dependencies.stm32h7]
-version = "^0.16.0"
-features = ["stm32h7s", "rt"]
+# [dependencies.stm32h7]
+# version = "^0.16.0"
+# features = ["stm32h7s", "rt"]
 
 [dependencies.cortex-m]
 version="0.7.7"
